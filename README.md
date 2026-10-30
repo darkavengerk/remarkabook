@@ -1,87 +1,109 @@
 # remarkabook
 
-Use a second reMarkable 2 as a "secondary monitor" for the first one.
+Use two reMarkable 2 tablets as one device.
 
-Open a document on the **main** tablet and the **sub** tablet opens the document with the
-same name in the same folder (creating the folders and a blank notebook if they do not
-exist yet). Closing follows too, and the sub keeps the same page count / current page.
+Open a document on either tablet and the other one follows:
 
-The main tablet stays completely stock: nothing is installed on it. All logic runs on
-the sub, which logs into the main over SSH and watches what is open there.
+- **Notebooks**: the other tablet opens the notebook with the same name in the same folder
+  (folders and a blank notebook are created if missing) and keeps the same page count and
+  page.
+- **PDF / EPUB present on both tablets** (same document, e.g. through the reMarkable
+  cloud): **book mode**. One tablet shows the left page, the other the right page. Turning a
+  page on either tablet turns the spread on both.
+- **PDF / EPUB only on one tablet**: the other opens a blank notebook of the same name that
+  grows up to the page being read.
+- Closing follows too.
 
 ```
- main (stock)                          sub (xovi + this repo)
- ┌──────────────┐   ssh (USB or WiFi)  ┌─────────────────────────────┐
- │ xochitl      │◄────────────────────│ dualrm-sync.sh              │
- │ dualrm-agent │  OPEN/STATE/CLOSE   │   └─ request/response files │
- │  (streamed,  │────────────────────►│ dualrm-open.qmd (xochitl    │
- │  not stored) │                     │   patch: open/close/pages)  │
- └──────────────┘                     └─────────────────────────────┘
+ tablet A (xovi)                        tablet B ("sub", xovi + sync)
+ ┌────────────────────┐  ssh (USB/WiFi) ┌──────────────────────────────┐
+ │ xochitl + patch    │                 │ xochitl + patch              │
+ │   │events  ▲cmds   │                 │   │events  ▲cmds             │
+ │ sockets 7781/7782  │                 │ sockets 7781/7782            │
+ │   ▼        │       │                 │   ▼        │                 │
+ │ dualrm-link.sh ◄───┼─────────────────┼─► dualrm-sync.sh (decides)   │
+ └────────────────────┘                 └──────────────────────────────┘
 ```
 
 ## Status
 
-Tested with main on firmware 3.29.1 and sub on 3.23.0 (xovi, qt-resource-rebuilder).
+Tested with "main" on firmware 3.29.1 and "sub" on 3.23.0, both with xovi and
+qt-resource-rebuilder.
 
 | Feature | State |
 |---|---|
-| Open / close mirroring, folder path + auto-create | works |
-| Notebook page count / current page | works (pages are added, never deleted) |
-| PDF / EPUB | sub notebook grows lazily up to the page being viewed |
+| Open / close follows, both ways | works |
+| Notebook page count / current page, both ways | works (pages are added, never deleted) |
+| Book mode for PDFs on both tablets | works |
 | Link over home WiFi | works |
 | Link over one USB cable (no WiFi) | works, see [USB cable](#usb-cable) |
 | Link over the sub's pogo pins | experimental, see [pogo/](pogo/README.md) |
 
 ## How it works
 
-- **`sub/dualrm-agent.sh`** is streamed to the main on each connection
-  (`ssh main 'sh -s' < dualrm-agent.sh`). It polls `xochitl.conf` (`LastOpen`) and the
-  open document's `.metadata` / `.content`, and prints `OPEN`, `STATE`, `CLOSE` and
-  heartbeat lines.
-- **`sub/dualrm-sync.sh`** (service on the sub) picks the link (USB first, then WiFi),
-  runs the agent and mirrors each event: finds or creates the folder chain and the
-  notebook by name, opens it, keeps the page count.
-- **`sub/xovi/dualrm-open.qmd`** is a qt-resource-rebuilder patch for xochitl on the sub.
-  A QML timer polls `/home/root/dualrm/request` and answers in `.../response`
-  (`open`, `close`, `status`, `addpage`, `gotopage`, `ensure`, `mkdir`, `create`).
-- **`sub/dualrm-usbrole.sh`** switches the sub's USB-C port between device mode (PC) and
-  host mode (main tablet) automatically.
-- **`sub/systemd/dualrm-xovi.service`** starts xovi at boot (xovi normally needs to be
-  started by hand after every reboot).
+Nothing polls. Both tablets run the same pieces (`node/`):
+
+- **`dualrm.qmd`**, a qt-resource-rebuilder patch for xochitl. It reports document and page
+  changes the moment they happen (`GET http://127.0.0.1:7781/ev?...`) and takes commands
+  over a held request (`GET http://127.0.0.1:7782/next`): `open`, `close`, `status`,
+  `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`.
+- **`dualrm-ev.sh` / `dualrm-cmd.sh`** behind systemd socket units (`Accept=yes`), so a
+  shell only runs while an event or command is in flight.
+- **`dualrm-link.sh`** is the main's end of the ssh session: it forwards the main's events
+  and hands the sub's commands to the main's xochitl.
+
+The sub additionally runs:
+
+- **`sub/dualrm-sync.sh`**: holds the link (USB first, then WiFi), sleeps on a fifo of
+  events from both tablets, pairs documents and moves the other tablet. It recognises its
+  own echoes (the other tablet reporting what it was just told to do).
+- **`sub/dualrm-usbrole.sh`**: switches the sub's USB-C port between device mode (PC) and
+  host mode (main tablet).
+- **`dualrm-xovi.service`** (both tablets): starts xovi at boot.
+
+Book mode settings in the sub's `dualrm.conf`:
+
+```sh
+BOOK_LEFT=main      # tablet showing the left page (main | sub)
+BOOK_COVER=0        # 1: first page alone on the right, like a printed book
+```
 
 ## Install
 
-Requirements on the **sub**: root SSH access, [xovi](https://github.com/asivery/xovi)
-with the qt-resource-rebuilder extension and its hash table built for that firmware.
-Nothing is needed on the main except SSH access.
+Requirements on **both** tablets: root SSH access, [xovi](https://github.com/asivery/xovi)
+with qt-resource-rebuilder and a hash table for the installed firmware
+(`xovi/rebuild_hashtable`). [Vellum](https://github.com/vellum-dev/vellum-cli) installs
+these: `vellum add qt-resource-rebuilder`.
 
 ```sh
-./install.sh root@<sub-ip> <main-wifi-ip>
+./install.sh root@<sub-ip> root@<main-ip> <main-wifi-ip>
 ```
 
-The script copies the files, enables the services, restarts xochitl with the patch and
-prints the sub's public key. Add that key to the **main**'s
-`/home/root/.ssh/authorized_keys`. Re-running it updates the files and keeps the key
-and `dualrm.conf`.
+The script copies the files, enables the sockets and services, restarts xochitl once on
+each tablet and prints the sub's public key if the main does not accept it yet. Add that
+key to the **main**'s `/home/root/.ssh/authorized_keys`. Re-running it updates the files
+and keeps the key and `dualrm.conf`. xochitl may only be restarted 4 times in 10 minutes;
+more and the tablet reboots.
 
 Give the main a fixed address in your router (DHCP reservation) if you use WiFi.
 
-### Useful commands (on the sub)
+### Useful commands
 
 ```sh
-tail -n 20 /home/root/dualrm/sync.log           # what the sync did
-systemctl disable --now dualrm-sync dualrm-usbrole   # turn it off
-/home/root/xovi/stock                            # xochitl without patches until next boot
-systemctl disable dualrm-xovi                    # stop starting xovi at boot
+tail -n 20 /home/root/dualrm/sync.log                # (sub) what the sync did
+systemctl disable --now dualrm-sync dualrm-usbrole   # (sub) turn it off
+/home/root/xovi/stock                                # xochitl without patches until next boot
+systemctl disable dualrm-xovi                        # stop starting xovi at boot
 ```
 
 ### Firmware updates
 
 - **Sub**: turn automatic updates off. An update boots a fresh root partition: the
-  services, the device tree edit and xovi's start-up are gone, and xovi needs a hash
-  table for the new firmware.
-- **Main**: can be updated, but check the sync afterwards. 3.29 changed the
-  `LastOpen` format, which the agent had to learn.
+  services, the device tree edit and xovi's start-up are gone.
+- **Main** (and the sub too, if updated): run `vellum check-os <version>` before, and after
+  the update `vellum upgrade`, `xovi/rebuild_hashtable`, then `install.sh` again. Check the
+  patch still loads: the xochitl QML changes between versions (3.29 for example returns
+  document ids that are not plain strings).
 
 ## USB cable
 

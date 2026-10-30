@@ -1,0 +1,9 @@
+[Unit]
+Description=dual-rM command long-poll
+
+[Service]
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=300
+ExecStart=/bin/sh /home/root/dualrm/dualrm-cmd.sh

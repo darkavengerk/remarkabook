@@ -1,0 +1,9 @@
+[Unit]
+Description=dual-rM event
+
+[Service]
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+RuntimeMaxSec=15
+ExecStart=/bin/sh /home/root/dualrm/dualrm-ev.sh

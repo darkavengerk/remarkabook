@@ -1,33 +1,129 @@
-; dual-rM sub-side patch (xovi / qt-resource-rebuilder).
-; Polls /home/root/dualrm/request once per second. One command per file:
-;   <nonce> open <uuid>
-;   <nonce> close [<uuid>|-]        (close the open document; if uuid given, only when it matches)
-;   <nonce> status                  -> ok <openDocId|-> <pageCount> <currentPage>
-;   <nonce> addpage [<index>]       (insert a page after the current one, or at <index>)
-;   <nonce> gotopage <index>
-;   <nonce> ensure <count> <target> (append blank pages up to <count> in one batch, max 500, then open <target>)
-;   <nonce> mkdir <parentUuid|-> <folder name...>
-;   <nonce> create <parentUuid|-> <notebook name...>
-; Writes the result to /home/root/dualrm/response as "<nonce> ok <id>" or "<nonce> error <reason>".
+; dual-rM patch for xochitl (xovi / qt-resource-rebuilder), same file on both tablets.
+; Nothing polls: events go out as they happen, commands come in over a held (long-poll) request.
+;   events  -> GET http://127.0.0.1:7781/ev?DOC <uuid>|-  /  PAGE <uuid> <pageCount> <currentPage>
+;   command <- GET http://127.0.0.1:7782/next  answered with "<nonce> <command...>":
+;     open <uuid>
+;     close [<uuid>|-]        (close the open document; if uuid given, only when it matches)
+;     status                  -> ok <openDocId|-> <pageCount> <currentPage>
+;     addpage [<index>]       (insert a page after the current one, or at <index>)
+;     gotopage <index>
+;     ensure <count> <target> (append blank pages up to <count> in one batch, max 500, then open <target>)
+;     mkdir <parentUuid|-> <folder name...>
+;     create <parentUuid|-> <notebook name...>
+;     emit                    (send DOC/PAGE for the current state again)
+;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
         LOCATE AFTER ALL
         INSERT {
-            Timer {
+            Item {
                 id: dualrmPoller
                 objectName: "dualrmPoller"
-                interval: 250
-                repeat: true
-                running: true
-                property string lastHandled: ""
-                property bool busy: false
-                property bool primed: false
+                property string lastNonce: ""
+                property var evQueue: []
+                property bool evBusy: false
+
+                // events go out one at a time so the receiver sees them in order
+                function ev(msg, done) {
+                    evQueue.push({ msg: msg, done: done });
+                    if (!evBusy) {
+                        evNext();
+                    }
+                }
+                function evNext() {
+                    const item = evQueue.shift();
+                    if (!item) {
+                        evBusy = false;
+                        return;
+                    }
+                    evBusy = true;
+                    const x = new XMLHttpRequest();
+                    x.onreadystatechange = () => {
+                        if (x.readyState !== XMLHttpRequest.DONE) {
+                            return;
+                        }
+                        if (item.done) {
+                            item.done();
+                        }
+                        evNext();
+                    };
+                    x.open("GET", "http://127.0.0.1:7781/ev?" + encodeURIComponent(item.msg));
+                    x.send();
+                }
+
+                function emitPage() {
+                    const d = documentView.item?.document;
+                    if (d) {
+                        ev("PAGE " + String(d.id) + " " + d.pageCount + " " + documentView.item.currentPage);
+                    }
+                }
+                function emitState() {
+                    const d = documentView.item?.document;
+                    if (!d) {
+                        ev("DOC -");
+                        return;
+                    }
+                    ev("DOC " + String(d.id));
+                    emitPage();
+                }
+
+                Connections {
+                    target: documentView.item
+                    ignoreUnknownSignals: true
+                    function onDocumentChanged() { dualrmPoller.emitState(); }
+                    function onCurrentPageChanged() { dualrmPoller.emitPage(); }
+                }
+                Connections {
+                    target: documentView.item?.document ?? null
+                    ignoreUnknownSignals: true
+                    function onPageCountChanged() { dualrmPoller.emitPage(); }
+                }
+
+                // long-poll for the next command; dualrm-cmd.sh holds the request until there is one
+                function poll() {
+                    const x = new XMLHttpRequest();
+                    x.onreadystatechange = () => {
+                        if (x.readyState !== XMLHttpRequest.DONE) {
+                            return;
+                        }
+                        const line = (x.responseText || "").trim();
+                        if (x.status !== 200) {
+                            dualrmRetry.interval = 3000;     // socket not up yet
+                            dualrmRetry.start();
+                            return;
+                        }
+                        if (line === "") {
+                            dualrmRetry.interval = 50;
+                            dualrmRetry.start();
+                            return;
+                        }
+                        const nonce = line.split(" ")[0];
+                        if (nonce === lastNonce) {
+                            // answered before but the answer was lost: answer again so it is cleared
+                            ev("RESP " + nonce + " " + lastAnswer, () => dualrmPoller.poll());
+                            return;
+                        }
+                        lastNonce = nonce;
+                        handle(line);
+                    };
+                    x.open("GET", "http://127.0.0.1:7782/next");
+                    x.send();
+                }
+                property string lastAnswer: ""
+                Timer {
+                    id: dualrmRetry
+                    repeat: false
+                    onTriggered: dualrmPoller.poll()
+                }
+                Component.onCompleted: {
+                    poll();
+                    emitState();
+                }
 
                 function respond(nonce, text) {
                     console.log("[dualrm] " + nonce + " " + text);
-                    const w = new XMLHttpRequest();
-                    w.open("PUT", "file:///home/root/dualrm/response");
-                    w.send(nonce + " " + text + "\n");
+                    lastAnswer = text;
+                    ev("RESP " + nonce + " " + text, () => dualrmPoller.poll());
                 }
 
                 function handle(line) {
@@ -53,6 +149,11 @@ AFFECT /qml/device/view/main/MainView.qml
                             } else {
                                 respond(nonce, "ok nothing-to-close");
                             }
+                            return;
+                        }
+                        if (cmd === "emit") {
+                            emitState();
+                            respond(nonce, "ok");
                             return;
                         }
                         if (cmd === "status") {
@@ -110,33 +211,6 @@ AFFECT /qml/device/view/main/MainView.qml
                     }
                 }
 
-                onTriggered: {
-                    if (dualrmPoller.busy) {
-                        return;
-                    }
-                    dualrmPoller.busy = true;
-                    const req = new XMLHttpRequest();
-                    req.onreadystatechange = () => {
-                        if (req.readyState !== XMLHttpRequest.DONE) {
-                            return;
-                        }
-                        dualrmPoller.busy = false;
-                        const line = (req.responseText || "").trim();
-                        if (!dualrmPoller.primed) {
-                            // ignore whatever was left in the request file before this start
-                            dualrmPoller.primed = true;
-                            dualrmPoller.lastHandled = line;
-                            return;
-                        }
-                        if (line === "" || line === dualrmPoller.lastHandled) {
-                            return;
-                        }
-                        dualrmPoller.lastHandled = line;
-                        dualrmPoller.handle(line);
-                    };
-                    req.open("GET", "file:///home/root/dualrm/request");
-                    req.send();
-                }
             }
         }
     END TRAVERSE

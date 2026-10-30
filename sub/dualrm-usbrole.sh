@@ -137,5 +137,5 @@ while :; do
                 fi
             fi ;;
     esac
-    usleep 500000
+    sleep 2     # state checks only; transitions above have their own short waits
 done

@@ -1,0 +1,9 @@
+[Unit]
+Description=dual-rM events from xochitl
+
+[Socket]
+ListenStream=127.0.0.1:7781
+Accept=yes
+
+[Install]
+WantedBy=sockets.target
