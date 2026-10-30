@@ -1,0 +1,15 @@
+# local config (real IPs)
+sub/dualrm.conf.local
+# kernel / module experiment (does not work: signed modules only)
+pogo/linux-rm/
+pogo/module/
+pogo/device-ko/
+pogo/*.txt
+pogo/build.log
+pogo/modcrc.py
+# device tree binaries and full decompiled trees (only the patch is kept)
+pogo/dtb/*.dtb
+pogo/dtb/*.dts
+# third-party hardware (CERN-OHL-S, linked from pogo/adapter/README.md)
+pogo/adapter/veryapt/
+pogo/adapter/order/

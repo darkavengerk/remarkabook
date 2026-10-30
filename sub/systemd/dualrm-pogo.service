@@ -1,0 +1,13 @@
+[Unit]
+Description=dual-rM pogo USB host setup (root hub awake, rm-pogo state machine parked)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /home/root/dualrm/dualrm-pogo.sh setup
+StandardOutput=append:/home/root/dualrm/sync.log
+StandardError=append:/home/root/dualrm/sync.log
+
+[Install]
+WantedBy=multi-user.target

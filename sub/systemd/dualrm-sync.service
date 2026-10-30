@@ -1,0 +1,13 @@
+[Unit]
+Description=dual-rM sync (mirror the main tablet's open document)
+After=network-online.target xochitl.service
+
+[Service]
+ExecStart=/bin/sh /home/root/dualrm/dualrm-sync.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/root/dualrm/sync.log
+StandardError=append:/home/root/dualrm/sync.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=dual-rM: start xovi at boot (loads the dualrm document-open patch into xochitl)
+After=xochitl.service home.mount
+RequiresMountsFor=/home/root/xovi
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# xovi/start re-launches xochitl with xovi preloaded. Undo for one boot: /home/root/xovi/stock
+ExecStart=/bin/bash /home/root/xovi/start
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# dual-rM: the link to the main tablet when this (sub) tablet is the USB host.
+# Must sort before 10-usb.network, which would give this side 10.11.99.1 too
+# and clash with the main. Get an address from the main's DHCP server instead.
+[Match]
+Driver=cdc_ether
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+DHCP=ipv4
+LinkLocalAddressing=no
+
+[DHCPv4]
+SendHostname=no

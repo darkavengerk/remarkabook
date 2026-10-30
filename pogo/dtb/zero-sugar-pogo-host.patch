@@ -1,0 +1,11 @@
+--- a/zero-sugar.dts
++++ b/zero-sugar.dts
+@@ -1767,7 +1767,7 @@
+ 				fsl,usbmisc = <0x4b 0x00>;
+ 				phy-clkgate-delay-us = <0x190>;
+ 				status = "okay";
+-				extcon = <0x00 0x4c>;
++				dr_mode = "host";
+ 				srp-disable;
+ 				hnp-disable;
+ 				dp-disable;

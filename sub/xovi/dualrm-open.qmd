@@ -1,0 +1,179 @@
+; dual-rM sub-side patch (xovi / qt-resource-rebuilder).
+; Polls /home/root/dualrm/request once per second. One command per file:
+;   <nonce> open <uuid>
+;   <nonce> close [<uuid>|-]        (close the open document; if uuid given, only when it matches)
+;   <nonce> status                  -> ok <openDocId|-> <pageCount> <currentPage>
+;   <nonce> addpage [<index>]       (insert a page after the current one, or at <index>)
+;   <nonce> gotopage <index>
+;   <nonce> ensure <count> <target> (append blank pages up to <count> in one batch, max 500, then open <target>)
+;   <nonce> mkdir <parentUuid|-> <folder name...>
+;   <nonce> create <parentUuid|-> <notebook name...>
+; Writes the result to /home/root/dualrm/response as "<nonce> ok <id>" or "<nonce> error <reason>".
+AFFECT /qml/device/view/main/MainView.qml
+    TRAVERSE Background
+        LOCATE AFTER ALL
+        INSERT {
+            Timer {
+                id: dualrmPoller
+                objectName: "dualrmPoller"
+                interval: 250
+                repeat: true
+                running: true
+                property string lastHandled: ""
+                property bool busy: false
+                property bool primed: false
+
+                function respond(nonce, text) {
+                    console.log("[dualrm] " + nonce + " " + text);
+                    const w = new XMLHttpRequest();
+                    w.open("PUT", "file:///home/root/dualrm/response");
+                    w.send(nonce + " " + text + "\n");
+                }
+
+                function handle(line) {
+                    const parts = line.split(" ");
+                    const nonce = parts[0];
+                    const cmd = parts[1];
+                    try {
+                        if (cmd === "open") {
+                            const entry = Library.entryForId(parts[2]);
+                            if (!entry) {
+                                respond(nonce, "error unknown-entry " + parts[2]);
+                                return;
+                            }
+                            root.openDocument_helper(entry, () => documentView.item.openDocument(entry));
+                            respond(nonce, "ok " + entry.id);
+                            return;
+                        }
+                        if (cmd === "close") {
+                            const open = documentView.item?.document;
+                            if (open && (parts.length < 3 || parts[2] === "-" || parts[2] === open.id)) {
+                                documentView.item.close();
+                                respond(nonce, "ok closed " + open.id);
+                            } else {
+                                respond(nonce, "ok nothing-to-close");
+                            }
+                            return;
+                        }
+                        if (cmd === "status") {
+                            const open = documentView.item?.document;
+                            respond(nonce, "ok " + (open ? open.id : "-") + " " + (open ? open.pageCount : 0)
+                                    + " " + (open ? documentView.item.currentPage : -1));
+                            return;
+                        }
+                        if (cmd === "addpage") {
+                            const open = documentView.item?.document;
+                            if (!open) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            const idx = parts.length > 2 ? parseInt(parts[2]) : undefined;
+                            documentView.item.addPage(open, idx);
+                            respond(nonce, "ok " + open.pageCount);
+                            return;
+                        }
+                        if (cmd === "ensure") {
+                            // ensure <count> <targetPage>: append blank pages in one batch, then open target
+                            if (!documentView.item?.document) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            const total = documentView.item.dualrmEnsurePages(parseInt(parts[2]), parseInt(parts[3]));
+                            respond(nonce, "ok " + total);
+                            return;
+                        }
+                        if (cmd === "gotopage") {
+                            if (!documentView.item?.document) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            documentView.item.openPage(parseInt(parts[2]));
+                            respond(nonce, "ok " + parts[2]);
+                            return;
+                        }
+                        if (cmd === "mkdir" || cmd === "create") {
+                            const parent = parts[2] === "-" ? "" : parts[2];
+                            const name = parts.slice(3).join(" ");
+                            if (name === "") {
+                                respond(nonce, "error empty-name");
+                                return;
+                            }
+                            const id = cmd === "mkdir"
+                                ? Library.createCollectionWrapper(parent, name)
+                                : LibraryController.createDocument(parent, name);
+                            respond(nonce, "ok " + String(id));
+                            return;
+                        }
+                        respond(nonce, "error unknown-command " + cmd);
+                    } catch (e) {
+                        respond(nonce, "error exception " + e);
+                    }
+                }
+
+                onTriggered: {
+                    if (dualrmPoller.busy) {
+                        return;
+                    }
+                    dualrmPoller.busy = true;
+                    const req = new XMLHttpRequest();
+                    req.onreadystatechange = () => {
+                        if (req.readyState !== XMLHttpRequest.DONE) {
+                            return;
+                        }
+                        dualrmPoller.busy = false;
+                        const line = (req.responseText || "").trim();
+                        if (!dualrmPoller.primed) {
+                            // ignore whatever was left in the request file before this start
+                            dualrmPoller.primed = true;
+                            dualrmPoller.lastHandled = line;
+                            return;
+                        }
+                        if (line === "" || line === dualrmPoller.lastHandled) {
+                            return;
+                        }
+                        dualrmPoller.lastHandled = line;
+                        dualrmPoller.handle(line);
+                    };
+                    req.open("GET", "file:///home/root/dualrm/request");
+                    req.send();
+                }
+            }
+        }
+    END TRAVERSE
+END AFFECT
+
+; Batched page append inside DocumentView (DocumentController/DeviceScreenInfo are in scope there).
+AFFECT /qml/device/view/documentview/DocumentView.qml
+    TRAVERSE FocusScope
+        LOCATE AFTER ALL
+        INSERT {
+            function dualrmEnsurePages(count, target) {
+                const doc = documentView.document;
+                if (!doc) {
+                    return -1;
+                }
+                const have = doc.pageCount;
+                const n = Math.min(count - have, 500);
+                if (n <= 0) {
+                    if (target >= 0) {
+                        documentView.openPage(Math.min(target, have - 1));
+                    }
+                    return have;
+                }
+                const template = doc.templateForPage(have - 1);
+                const paperSize = DeviceScreenInfo.paperSize;
+                documentView.addingPage = true;
+                for (let i = 0; i < n - 1; i++) {
+                    DocumentController.addPageWithTemplateAndPageSize(doc, -1, template, paperSize);
+                }
+                DocumentController.addPageWithTemplateAndPageSize(doc, -1, template, paperSize, function() {
+                    documentView.addingPage = false;
+                    if (target >= 0) {
+                        documentView.openPage(Math.min(target, have + n - 1));
+                    }
+                });
+                return have + n;
+            }
+        }
+    END TRAVERSE
+END AFFECT

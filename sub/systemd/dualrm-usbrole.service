@@ -1,0 +1,14 @@
+[Unit]
+Description=dual-rM USB role switcher (become USB host when the main tablet is plugged in)
+After=xochitl.service
+
+[Service]
+ExecStart=/bin/sh /home/root/dualrm/dualrm-usbrole.sh
+ExecStopPost=/bin/sh -c 'for r in /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role; do echo gadget > $$r; done'
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/root/dualrm/sync.log
+StandardError=append:/home/root/dualrm/sync.log
+
+[Install]
+WantedBy=multi-user.target
