@@ -47,7 +47,7 @@ AFFECT /qml/device/view/main/MainView.qml
                         }
                         if (cmd === "close") {
                             const open = documentView.item?.document;
-                            if (open && (parts.length < 3 || parts[2] === "-" || parts[2] === open.id)) {
+                            if (open && (parts.length < 3 || parts[2] === "-" || parts[2] === String(open.id))) {
                                 documentView.item.close();
                                 respond(nonce, "ok closed " + open.id);
                             } else {
@@ -57,7 +57,7 @@ AFFECT /qml/device/view/main/MainView.qml
                         }
                         if (cmd === "status") {
                             const open = documentView.item?.document;
-                            respond(nonce, "ok " + (open ? open.id : "-") + " " + (open ? open.pageCount : 0)
+                            respond(nonce, "ok " + (open ? String(open.id) : "-") + " " + (open ? open.pageCount : 0)
                                     + " " + (open ? documentView.item.currentPage : -1));
                             return;
                         }
