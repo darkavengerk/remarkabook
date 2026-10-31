@@ -16,7 +16,6 @@
 ;     import <parentUuid|-> <file path...>  (import a PDF/EPUB into the library; gets a new id)
 ;     pen                     -> ok <tool settings as JSON> of the open document
 ;     setpen <JSON>           (apply tool settings from the other tablet; keeps the active tool)
-;     sleep                   (go to sleep like the power button)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
@@ -243,12 +242,6 @@ AFFECT /qml/device/view/main/MainView.qml
                                 documentView.item.dualrmSetPen(parts.slice(2).join(" "));
                             }
                             respond(nonce, "ok " + documentView.item.dualrmPenState());
-                            return;
-                        }
-                        if (cmd === "sleep") {
-                            // answer first: the tablet stops right after
-                            respond(nonce, "ok");
-                            Qt.callLater(() => BatteryManager.goToSleep());
                             return;
                         }
                         if (cmd === "import") {

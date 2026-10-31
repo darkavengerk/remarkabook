@@ -106,6 +106,19 @@ local_request() { # command... -> prints the "ok" payload of the local xochitl; 
     return 1
 }
 
+power_key() { # press the power button, as a finger would (puts the tablet to sleep, or wakes it
+               # if it is still showing the sleep screen): input events written to the key's device
+    _d=""
+    for _e in /sys/class/input/event*; do
+        case "$(cat "$_e/device/name" 2>/dev/null)" in *powerkey*) _d=/dev/input/${_e##*/} ;; esac
+    done
+    [ -n "$_d" ] || return 1
+    # struct input_event on armv7: 8 bytes time (ignored), type, code, value; then EV_SYN
+    printf '\0\0\0\0\0\0\0\0\001\0\164\0\001\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > "$_d"   # KEY_POWER down
+    usleep 150000
+    printf '\0\0\0\0\0\0\0\0\001\0\164\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' > "$_d"     # KEY_POWER up
+}
+
 reader_alive() { # is someone reading $D/events? (a killed reader leaves the file behind)
     _p=$(cat "$D/events.reader" 2>/dev/null) || return 1
     [ -n "$_p" ] && kill -0 ${_p%% *} 2>/dev/null

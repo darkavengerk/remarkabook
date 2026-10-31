@@ -448,21 +448,25 @@ on_pen() { # side json
     req "$y" setpen "$2" >/dev/null && log "pens: $x -> $y"
 }
 
-SLEEPT=-100
+# xochitl only sleeps through its own power button handling (BatteryManager.goToSleep refuses
+# while the screen is not showing the sleep screen), so the other tablet gets a key press. It
+# must be awake for that: a press on a tablet showing the sleep screen wakes it up.
+AWAKE_main=1; AWAKE_sub=1
 on_sleep() { # side: x is going to sleep
     x=$1; y=$(other "$x")
-    now
-    [ $((NOW - SLEEPT)) -le 20 ] && return      # we put it to sleep (or it follows the other one)
-    SLEEPT=$NOW
+    put AWAKE "$x" 0
+    [ "$(get AWAKE "$y")" = 1 ] || return
     [ "$y" = sub ] || [ "$LINK" = 1 ] || return
-    req "$y" sleep >/dev/null && log "$x went to sleep -> $y too"
+    put AWAKE "$y" 0
+    shell_on "$y" power_key >/dev/null && log "$x went to sleep -> $y too"
 }
 
 on_wake() { # side
+    put AWAKE "$1" 1
     # the sub's link may be stuck on a session that died while either tablet slept: start over
     [ "$1" = sub ] || return
     for pd in /proc/[0-9]*; do
-        case "$(tr '\0' ' ' < "$pd/cmdline" 2>/dev/null)" in
+        case "$(tr '\0' ' ' 2>/dev/null < "$pd/cmdline")" in
             ssh\ *dualrm-link.sh*) kill "${pd#/proc/}" 2>/dev/null ;;
         esac
     done
@@ -506,7 +510,7 @@ while :; do
         SLEEP) on_sleep "$side" ;;
         WAKE) on_wake "$side" ;;
         LINKUP)
-            LINK=1; log "link up"
+            LINK=1; AWAKE_main=1; log "link up"
             remote_request emit >/dev/null ;;
         LINKDOWN)
             LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM="" ;;

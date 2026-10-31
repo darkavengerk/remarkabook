@@ -3,7 +3,7 @@
 #   ssh main sh /home/root/dualrm/dualrm-link.sh
 # stdout: this tablet's events ("EV DOC/PAGE/RESP ..."), "HELLO" once, "HB" every 30 s
 # stdin:  "CMD <nonce> <command...>" from the sub
-#         find <parent|-> <type> <name...>, has <uuid>, fsize <file>, snap_docs and new_doc
+#         find <parent|-> <type> <name...>, has <uuid>, fsize <file>, snap_docs, new_doc and power_key
 #         are answered here from the files; everything else goes to xochitl.
 . /home/root/dualrm/dualrm-lib.sh
 mkfifos
@@ -43,6 +43,8 @@ while IFS= read -r l; do
                     snap_docs; echo "EV RESP $nonce ok" ;;
                 new_doc)
                     echo "EV RESP $nonce ok $(new_doc)" ;;
+                power_key)
+                    power_key; echo "EV RESP $nonce ok" ;;
                 *)
                     local_post "$nonce $c" ;;
             esac ;;
