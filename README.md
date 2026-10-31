@@ -10,8 +10,14 @@ Open a document on either tablet and the other one follows:
 - **PDF / EPUB present on both tablets** (same document, e.g. through the reMarkable
   cloud): **book mode**. One tablet shows the left page, the other the right page. Turning a
   page on either tablet turns the spread on both.
-- **PDF / EPUB only on one tablet**: the other opens a blank notebook of the same name that
-  grows up to the page being read.
+- **PDF / EPUB only on one tablet**: it is copied to the other tablet (same folder path,
+  imported with xochitl's own importer, no restart) and opened there in book mode. The copy
+  gets its own document id; the pair is remembered in the sub's `dualrm/pairs`. If the copy
+  fails, the other tablet opens a blank notebook of the same name instead.
+- **Annotations** (pen strokes, highlights) of book-mode documents are copied page by page:
+  from the tablet that opened the document before the other one opens it, and both ways once
+  it is closed. The newer file wins; a replaced file is kept in `dualrm/backup/` on that tablet
+  for 30 days. Annotations go over the dual-rM link only, not the reMarkable cloud.
 - Closing follows too.
 
 ```
@@ -35,6 +41,8 @@ qt-resource-rebuilder.
 | Open / close follows, both ways | works |
 | Notebook page count / current page, both ways | works (pages are added, never deleted) |
 | Book mode for PDFs on both tablets | works |
+| PDF / EPUB missing on one tablet: copied over | works |
+| Annotations of book-mode documents, both ways | works (on close; not live) |
 | Link over home WiFi | works |
 | Link over one USB cable (no WiFi) | works, see [USB cable](#usb-cable) |
 | Link over the sub's pogo pins | experimental, see [pogo/](pogo/README.md) |
@@ -46,7 +54,7 @@ Nothing polls. Both tablets run the same pieces (`node/`):
 - **`dualrm.qmd`**, a qt-resource-rebuilder patch for xochitl. It reports document and page
   changes the moment they happen (`GET http://127.0.0.1:7781/ev?...`) and takes commands
   over a held request (`GET http://127.0.0.1:7782/next`): `open`, `close`, `status`,
-  `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`.
+  `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`.
 - **`dualrm-ev.sh` / `dualrm-cmd.sh`** behind systemd socket units (`Accept=yes`), so a
   shell only runs while an event or command is in flight.
 - **`dualrm-link.sh`** is the main's end of the ssh session: it forwards the main's events
@@ -67,6 +75,19 @@ Book mode settings in the sub's `dualrm.conf`:
 BOOK_LEFT=main      # tablet showing the left page (main | sub)
 BOOK_COVER=0        # 1: first page alone on the right, like a printed book
 ```
+
+Notes on copying:
+
+- Annotations are matched by page id (same document on both) or by PDF page (a copy), so
+  pages inserted into a copied PDF are not copied. EPUB copies are not matched at all (each
+  tablet lays out the pages itself).
+- A tablet only reads a page's annotations when it opens the document, so strokes copied
+  while it has the document open show up the next time it is opened.
+- Annotating the same page on both tablets while they are apart: the newer page wins, the
+  other is in `dualrm/backup/`.
+- 3.29 names an imported copy without the `.pdf` extension, 3.23 keeps it.
+- Turn the reMarkable cloud sync off on one tablet (or both): two tablets editing the same
+  document make the cloud drop one side's changes.
 
 ## Install
 

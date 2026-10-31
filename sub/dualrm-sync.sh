@@ -14,7 +14,12 @@
 #   pdf/epub present on both (same document id, e.g. via reMarkable cloud)
 #                     -> book mode: one tablet shows the left page, the other the right page
 #   pdf/epub missing on the other tablet
-#                     -> blank notebook of the same name that grows up to the page being read
+#                     -> copied there (same folder path, xochitl's importer, new id; the pair is
+#                        kept in $D/pairs), then book mode. If the copy fails: a blank notebook
+#                        of the same name that grows up to the page being read
+# Annotations of book-mode documents (pen, highlights) are copied page by page: from the tablet
+# that opened the document before the other one opens it, and both ways once it is closed.
+# The newer file wins; a replaced file is kept in $D/backup/ on the tablet it was replaced on.
 # Echoes (the other tablet reporting what we just told it to do) are recognised and dropped.
 . /home/root/dualrm/dualrm-lib.sh
 KEY=$D/id_dualrm
@@ -26,6 +31,8 @@ BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 
 mkfifos
 trap 'rm -f "$D/events.reader"' EXIT
+trap 'exit 0' TERM INT HUP
+rmdir "$D/ann.lock" 2>/dev/null
 [ -p "$D/linkin" ] || { rm -f "$D/linkin"; mkfifo "$D/linkin"; }
 echo $$ > "$D/events.reader"
 exec 3<> "$D/events"    # read end (opened read-write so it never sees EOF)
@@ -56,6 +63,7 @@ link_loop() {
         MAIN=$(pick_main)
         if [ -z "$MAIN" ]; then sleep 5; continue; fi
         log "connecting to main at $MAIN"
+        echo "$MAIN" > "$D/mainhost"
         # -I: drop the session when the main falls silent (it sends HB every 30 s)
         ssh -y -K 10 -I 75 -i "$KEY" "root@$MAIN" 'sh /home/root/dualrm/dualrm-link.sh' \
             < "$D/linkin" 2>>"$D/ssh.err" | while IFS= read -r l; do
@@ -70,6 +78,8 @@ link_loop() {
         sleep 3
     done
 }
+
+mssh() { ssh -y -K 10 -i "$KEY" "root@$(cat "$D/mainhost")" "$@" 2>>"$D/ssh.err"; }   # extra session for files
 
 LINK=0
 remote_request() { # command... -> "ok" payload from the main
@@ -116,30 +126,167 @@ has_on() { # side uuid
     if [ "$1" = sub ]; then live "$2"; else [ "$(remote_request has "$2")" = yes ]; fi
 }
 
-mirror_path() { # side path -> uuid of the notebook at that path on side (folders/notebook created)
+shell_on() { # side function [args]: a lib function, run on side (the main's link answers these)
+    _s=$1; shift
+    if [ "$_s" = sub ]; then "$@"; else remote_request "$@"; fi
+}
+
+fsize_on() { # side file-in-XD
+    if [ "$1" = sub ]; then stat -c %s "$XD/$2" 2>/dev/null; else remote_request fsize "$2"; fi
+}
+
+mirror_folders() { # side path -> id of the folder holding the path's last name ("-": top level),
+                   # folders created as needed
     s=$1; path=$2; parent=""
     oifs=$IFS; IFS=$US; set -f; set -- $path; set +f; IFS=$oifs
     n=$#; i=1
     for part in "$@"; do
-        if [ $i -lt $n ]; then
-            fid=$(find_on "$s" "$parent" CollectionType "$part")
-            if [ -z "$fid" ]; then
-                fid=$(req "$s" mkdir "${parent:--}" "$part") || return 1
-                log "$s: created folder '$part'"
-            fi
-            parent=$fid
-        else
-            doc=$(find_on "$s" "$parent" DocumentType "$part")
-            if [ -z "$doc" ]; then
-                doc=$(req "$s" create "${parent:--}" "$part") || return 1
-                log "$s: created notebook '$part'"
-            fi
-            echo "$doc"
-            return 0
+        [ $i -lt $n ] || break
+        fid=$(find_on "$s" "$parent" CollectionType "$part")
+        if [ -z "$fid" ]; then
+            fid=$(req "$s" mkdir "${parent:--}" "$part") || return 1
+            log "$s: created folder '$part'"
         fi
+        parent=$fid
         i=$((i + 1))
     done
-    return 1
+    echo "${parent:--}"
+}
+
+mirror_path() { # side path -> uuid of the notebook at that path on side (folders/notebook created)
+    parent=$(mirror_folders "$1" "$2") || return 1
+    [ "$parent" = - ] && parent=""
+    name=${2##*"$US"}
+    doc=$(find_on "$1" "$parent" DocumentType "$name")
+    if [ -z "$doc" ]; then
+        doc=$(req "$1" create "${parent:--}" "$name") || return 1
+        log "$1: created notebook '$name'"
+    fi
+    echo "$doc"
+}
+
+# ---------------------------------------------------------------- PDF / EPUB on both tablets
+pair_of() { # side doc ft path -> the same document on the other tablet: same id, an earlier
+            # copy ($D/pairs), or a file of the same name and size in the same folder
+    x=$1; u=$2; y=$(other "$x")
+    if has_on "$y" "$u"; then echo "$u"; return 0; fi
+    if [ -f "$D/pairs" ]; then
+        if [ "$x" = sub ]; then c=$(awk -v u="$u" '$1 == u { c = $2 } END { print c }' "$D/pairs")
+        else c=$(awk -v u="$u" '$2 == u { c = $1 } END { print c }' "$D/pairs"); fi
+        [ -n "$c" ] && has_on "$y" "$c" && { echo "$c"; return 0; }
+    fi
+    parent=$(mirror_folders "$y" "$4") || return 1
+    [ "$parent" = - ] && parent=""
+    c=$(find_on "$y" "$parent" DocumentType "${4##*"$US"}")
+    [ -n "$c" ] && [ "$(fsize_on "$y" "$c.$3")" = "$(fsize_on "$x" "$u.$3")" ] || return 1
+    pair_add "$x" "$u" "$c"
+    echo "$c"
+}
+
+pair_add() { # side doc other-doc
+    if [ "$1" = sub ]; then echo "$2 $3"; else echo "$3 $2"; fi >> "$D/pairs"
+}
+
+copy_doc() ( # side doc ft path -> id of a new copy on the other tablet (same folder path)
+    x=$1; u=$2; ft=$3; y=$(other "$x")
+    parent=$(mirror_folders "$y" "$4") || exit 1
+    name=${4##*"$US"}
+    # the importer names the copy after the file (3.29 drops the extension, 3.23 keeps it)
+    f=$(printf '%s' "$name" | tr / _)
+    case "$f" in *."$ft") ;; *) f="$f.$ft" ;; esac
+    log "copying '$name' ($(( $(fsize_on "$x" "$u.$ft") / 1024 )) KB) to $y"
+    shell_on "$y" snap_docs >/dev/null || exit 1
+    if [ "$y" = main ]; then
+        { printf '%s\n' "$f"; cat "$XD/$u.$ft"; } \
+            | mssh 'IFS= read -r n; mkdir -p /home/root/dualrm/inbox && cat > "/home/root/dualrm/inbox/$n"' || exit 1
+    else
+        mkdir -p "$D/inbox" && mssh "cat $XD/$u.$ft" > "$D/inbox/$f" || exit 1
+    fi
+    req "$y" import "$parent" "$D/inbox/$f" >/dev/null || exit 1
+    i=0; c=""
+    while [ $i -lt 120 ] && [ -z "$c" ]; do
+        sleep 1; i=$((i + 1))
+        c=$(shell_on "$y" new_doc)
+    done
+    if [ "$y" = main ]; then mssh 'rm -rf /home/root/dualrm/inbox'; else rm -rf "$D/inbox"; fi
+    [ -n "$c" ] || { log "$y: import of '$name' did not finish"; exit 1; }
+    pair_add "$x" "$u" "$c"
+    log "$y: imported '$name' as $c"
+    sleep 1     # let the library list it before it is opened
+    echo "$c"
+)
+
+ann_sync() ( # sub-doc main-doc both|tomain|tosub: copy the newer annotation files across
+    s=$1; m=$2; T=$D/ann.work
+    # an EPUB copy lays out its pages by itself: only the same document can be matched
+    [ "$s" != "$m" ] && [ -f "$XD/$s.epub" ] && exit 0
+    rm -rf "$T"; mkdir -p "$T/out" "$T/in"
+    ann_list "$s" > "$T/s"
+    mssh ". $D/dualrm-lib.sh; ann_list $m" > "$T/m" || { rm -rf "$T"; exit 1; }
+    same=0; [ "$s" = "$m" ] && same=1
+    # pages are matched by page id (same document) or by PDF page (a copy)
+    awk -v same=$same -v dir="$3" '
+        { side = (FILENAME == ARGV[1]) ? 1 : 2 }
+        $1 == "P" { k = same ? $2 : $3; if (k == "-" || k == "x") next; ID[side, k] = $2; K[side, $2] = k; next }
+        $1 == "F" { k = K[side, $3]; if (k == "") next; T[side, $2, k] = $4; H[side, $2, k] = $5; ALL[$2 " " k] = 1 }
+        END {
+            for (tk in ALL) {
+                split(tk, a, " "); t = a[1]; k = a[2]
+                hs = H[1, t, k]; hm = H[2, t, k]
+                if (hs == hm) continue
+                if (dir != "tosub" && hs != "" && (hm == "" || T[1, t, k] > T[2, t, k]) && ID[2, k] != "")
+                    print "tomain", t, ID[1, k], ID[2, k]
+                else if (dir != "tomain" && hm != "" && (hs == "" || T[2, t, k] > T[1, t, k]) && ID[1, k] != "")
+                    print "tosub", t, ID[2, k], ID[1, k]
+            }
+        }' "$T/s" "$T/m" > "$T/plan"
+    rel() { # doc kind page -> annotation file, and the page preview that goes with it
+        if [ "$2" = hl ]; then echo "$1.highlights/$3.json"; else echo "$1/$3.rm $1.thumbnails/$3.png"; fi
+    }
+    up=0; down=0; list=""
+    while read -r d t from to; do
+        if [ "$d" = tomain ]; then
+            set -- $(rel "$s" "$t" "$from"); set -- "$@" $(rel "$m" "$t" "$to")
+            if [ $# = 4 ]; then mkdir -p "$T/out/$m" "$T/out/$m.thumbnails"; cp -p "$XD/$1" "$T/out/$3"
+                [ -f "$XD/$2" ] && cp -p "$XD/$2" "$T/out/$4"
+            else mkdir -p "$T/out/$m.highlights"; cp -p "$XD/$1" "$T/out/$2"; fi
+            up=$((up + 1))
+        else
+            list="$list $(rel "$m" "$t" "$from")"
+            down=$((down + 1))
+        fi
+    done < "$T/plan"
+    if [ $up -gt 0 ]; then
+        tar cf - -C "$T/out" . | mssh ". $D/dualrm-lib.sh; t=$D/ann.in; rm -rf \$t; mkdir -p \$t && tar xf - -C \$t && ann_place \$t" \
+            || log "annotations: copy to main failed"
+    fi
+    if [ $down -gt 0 ]; then
+        mssh "cd $XD && set -- && for f in $list; do [ -e \$f ] && set -- \"\$@\" \$f; done; tar cf - \"\$@\"" \
+            | tar xf - -C "$T/in" || log "annotations: copy from main failed"
+        mkdir -p "$T/out2"
+        while read -r d t from to; do
+            [ "$d" = tosub ] || continue
+            set -- $(rel "$m" "$t" "$from"); set -- "$@" $(rel "$s" "$t" "$to")
+            if [ $# = 4 ]; then mkdir -p "$T/out2/$s" "$T/out2/$s.thumbnails"; mv "$T/in/$1" "$T/out2/$3"
+                [ -f "$T/in/$2" ] && mv "$T/in/$2" "$T/out2/$4"
+            else mkdir -p "$T/out2/$s.highlights"; mv "$T/in/$1" "$T/out2/$2"; fi
+        done < "$T/plan"
+        ann_place "$T/out2"
+    fi
+    [ $((up + down)) -gt 0 ] && log "annotations: $up page(s) to main, $down to sub"
+    rm -rf "$T"
+)
+
+ann_locked() { # command...: one annotation copy at a time
+    while ! mkdir "$D/ann.lock" 2>/dev/null; do sleep 1; done
+    "$@"
+    rmdir "$D/ann.lock"
+}
+
+BS=""; BM=""    # the book-mode pair: sub's document, main's document
+book_end() { # book mode is over: copy annotations both ways once both have saved
+    [ -n "$BS" ] && [ "$LINK" = 1 ] && ( sleep 3; ann_locked ann_sync "$BS" "$BM" both ) &
+    BS=""; BM=""
 }
 
 goto() { # side page: show page on side unless it is there already
@@ -226,9 +373,11 @@ on_doc() { # side uuid ft path
     [ "$LINK" = 1 ] || return       # no main: just remember; the main's state wins at link up
     # a document was opened by hand on x
     target=""
+    book_end
     case "$3" in
         pdf|epub)
-            if has_on "$y" "$u"; then target=$u; MODE=book
+            target=$(pair_of "$x" "$u" "$3" "$4") || target=$(copy_doc "$x" "$u" "$3" "$4")
+            if [ -n "$target" ]; then MODE=book
             else target=$(mirror_path "$y" "$4") && MODE=lazy
             fi ;;
         *)
@@ -236,6 +385,11 @@ on_doc() { # side uuid ft path
     esac
     if [ -z "$target" ]; then log "no counterpart on $y for '$(echo "$4" | tr "$US" /)'"; MODE=""; return; fi
     LEAD=$x
+    if [ "$MODE" = book ]; then
+        if [ "$x" = sub ]; then BS=$u; BM=$target; dir=tomain; else BS=$target; BM=$u; dir=tosub; fi
+        # the other tablet reads its pages when it opens the document: copy before that
+        [ "$(get DOC "$y")" = "$target" ] || ann_locked ann_sync "$BS" "$BM" "$dir"
+    fi
     if [ "$(get DOC "$y")" = "$target" ]; then
         PENDING=""
     else
@@ -271,6 +425,7 @@ on_page() { # side uuid pagecount currentpage
 close_pending() { # the document on CLOSING_FROM stayed closed: close the other side too
     x=$CLOSING_FROM; CLOSING_FROM=""; y=$(other "$x")
     [ -n "$(get DOC "$x")" ] && return
+    book_end
     MODE=""; PENDING=""
     d=$(get DOC "$y"); [ -n "$d" ] || return
     CLOSING=$y
@@ -279,7 +434,7 @@ close_pending() { # the document on CLOSING_FROM stayed closed: close the other 
 
 # ---------------------------------------------------------------- main loop
 link_loop &
-log "sync v7 (event driven, both ways)"
+log "sync v8 (event driven, both ways, copies PDFs and annotations)"
 CLOSING_FROM=""
 local_request emit >/dev/null
 while :; do
@@ -305,6 +460,6 @@ while :; do
             LINK=1; log "link up"
             remote_request emit >/dev/null ;;
         LINKDOWN)
-            LINK=0; MODE=""; PENDING=""; CLOSING_FROM="" ;;
+            LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM="" ;;
     esac
 done

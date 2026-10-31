@@ -25,5 +25,5 @@ case "$msg" in
         out="EV $msg" ;;
 esac
 # hand on before answering, so events stay in order (the patch sends them one at a time)
-[ -n "$out" ] && [ -e "$D/events.reader" ] && printf '%s\n' "$out" > "$D/events"
+[ -n "$out" ] && reader_alive && printf '%s\n' "$out" > "$D/events"
 http_reply ok

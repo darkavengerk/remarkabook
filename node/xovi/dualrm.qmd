@@ -11,6 +11,7 @@
 ;     mkdir <parentUuid|-> <folder name...>
 ;     create <parentUuid|-> <notebook name...>
 ;     emit                    (send DOC/PAGE for the current state again)
+;     import <parentUuid|-> <file path...>  (import a PDF/EPUB into the library; gets a new id)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
@@ -203,6 +204,17 @@ AFFECT /qml/device/view/main/MainView.qml
                                 ? Library.createCollectionWrapper(parent, name)
                                 : LibraryController.createDocument(parent, name);
                             respond(nonce, "ok " + String(id));
+                            return;
+                        }
+                        if (cmd === "import") {
+                            if (typeof DocumentImporter === "undefined") {
+                                respond(nonce, "error no-importer");
+                                return;
+                            }
+                            const parent = parts[2] === "-" ? "" : parts[2];
+                            const file = parts.slice(3).join(" ");
+                            DocumentImporter.importFromUrls(["file://" + file.split("/").map(encodeURIComponent).join("/")], parent);
+                            respond(nonce, "ok");
                             return;
                         }
                         respond(nonce, "error unknown-command " + cmd);

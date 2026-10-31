@@ -14,7 +14,7 @@ XD=/home/root/.local/share/remarkable/xochitl
 US=$(printf '\037')
 CR=$(printf '\r')
 
-log() { echo "$(date +%H:%M:%S) $*"; }
+log() { echo "$(date +%H:%M:%S) $*" >&2; }   # stderr: stdout carries replies / captured results
 
 mkfifos() {
     [ -p "$D/bell" ] || { rm -f "$D/bell"; mkfifo "$D/bell"; }
@@ -104,4 +104,76 @@ local_request() { # command... -> prints the "ok" payload of the local xochitl; 
     log "no answer for: $*" >&2
     : > "$D/cmd"
     return 1
+}
+
+reader_alive() { # is someone reading $D/events? (a killed reader leaves the file behind)
+    _p=$(cat "$D/events.reader" 2>/dev/null) || return 1
+    [ -n "$_p" ] && kill -0 ${_p%% *} 2>/dev/null
+}
+
+# ---------------------------------------------------------------- copying documents
+# A PDF/EPUB missing on the other tablet is imported there with xochitl's own importer
+# (patch command "import"): no restart, but the copy gets a new document id.
+snap_docs() { ls "$XD" | grep -E '\.(pdf|epub)$' > "$D/inbox.before"; }
+
+new_doc() { # -> id of a document imported since snap_docs, or nothing
+    ls "$XD" | grep -E '\.(pdf|epub)$' | grep -vxF -f "$D/inbox.before" | while read -r _f; do
+        _u=${_f%.*}
+        [ -f "$XD/$_u.metadata" ] && [ -f "$XD/$_u.content" ] && { echo "$_u"; break; }
+    done
+}
+
+# ---------------------------------------------------------------- annotations
+# Pen strokes live in <doc>/<page id>.rm, highlights in <doc>.highlights/<page id>.json,
+# page previews in <doc>.thumbnails/<page id>.png. Both copies of a PDF know which PDF page
+# each page id shows (.content), so annotations can be matched page by page.
+page_map() { # doc -> "<page id> <pdf page|->" per page (.content format 1 or 2)
+    awk '
+        /"cPages"/ { v2 = 1 }
+        v2 && /"id": "/ {
+            if (id != "") print id, (del ? "x" : r)
+            id = $0; sub(/.*"id": "/, "", id); sub(/".*/, "", id); r = "-"; del = 0; inr = 0; indel = 0
+        }
+        v2 && /"redir"/ { inr = 1 }
+        v2 && /"deleted"/ { indel = 1 }
+        v2 && /"value"/ && (inr || indel) {
+            n = $0; sub(/.*"value": /, "", n); sub(/[^0-9-].*/, "", n)
+            if (inr) r = n; else del = (n != "0")
+            inr = 0; indel = 0
+        }
+        !v2 && /^    "pages": \[/ { inp = 1; next }
+        !v2 && /^    "redirectionPageMap": \[/ { inm = 1; next }
+        (inp || inm) && /\]/ { inp = 0; inm = 0; next }
+        inp { s = $0; gsub(/[ ",]/, "", s); if (s != "") P[np++] = s }
+        inm { s = $0; gsub(/[ ,]/, "", s); if (s != "") M[nm++] = s }
+        END {
+            if (v2) { if (id != "") print id, (del ? "x" : r) }
+            else for (i = 0; i < np; i++) print P[i], (i < nm && M[i] >= 0 ? M[i] : "-")
+        }' "$XD/$1.content"
+}
+
+ann_list() { # doc -> "P <page id> <pdf page>" per page, then "F <rm|hl> <page id> <mtime> <md5>"
+    page_map "$1" | sed 's/^/P /'
+    for _f in "$XD/$1"/*.rm "$XD/$1.highlights"/*.json; do
+        [ -f "$_f" ] || continue
+        _n=${_f##*/}; _k=rm; case "$_n" in *.json) _k=hl ;; esac
+        _m=$(md5sum "$_f"); echo "F $_k ${_n%.*} $(stat -c %Y "$_f") ${_m%% *}"
+    done
+}
+
+ann_place() { # staging dir laid out like $XD -> move its files into $XD, keeping a backup of
+              # any annotation file that gets replaced (in $D/backup/<time>/)
+    _b=$D/backup/$(date +%Y%m%d-%H%M%S)
+    ( cd "$1" && find . -type f ) | while read -r _f; do
+        _f=${_f#./}
+        case "$_f" in
+            *.rm|*.json) [ -f "$XD/$_f" ] && mkdir -p "$_b/${_f%/*}" && cp -p "$XD/$_f" "$_b/$_f" ;;
+        esac
+        mkdir -p "$XD/${_f%/*}"
+        mv -f "$1/$_f" "$XD/$_f"
+    done
+    rm -rf "$1"
+    # backups older than 30 days go
+    [ -d "$D/backup" ] && find "$D/backup" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} \;
+    :
 }
