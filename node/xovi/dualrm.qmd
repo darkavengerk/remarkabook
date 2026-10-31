@@ -200,9 +200,12 @@ AFFECT /qml/device/view/main/MainView.qml
                                 respond(nonce, "error empty-name");
                                 return;
                             }
-                            const id = cmd === "mkdir"
-                                ? Library.createCollectionWrapper(parent, name)
-                                : LibraryController.createDocument(parent, name);
+                            // 3.29 dropped Library.createCollectionWrapper for LibraryController.createCollection
+                            const id = cmd !== "mkdir"
+                                ? LibraryController.createDocument(parent, name)
+                                : typeof Library.createCollectionWrapper === "function"
+                                    ? Library.createCollectionWrapper(parent, name)
+                                    : LibraryController.createCollection(parent, name);
                             respond(nonce, "ok " + String(id));
                             return;
                         }
