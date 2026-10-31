@@ -20,6 +20,9 @@
 # Annotations of book-mode documents (pen, highlights) are copied page by page: from the tablet
 # that opened the document before the other one opens it, and both ways once it is closed.
 # The newer file wins; a replaced file is kept in $D/backup/ on the tablet it was replaced on.
+# Pen settings (pen, colour, width) of paired documents follow each other; when a pair opens,
+# the main's settings win. Going to sleep on one tablet puts the other to sleep too (waking
+# up is per tablet: only the power button wakes a reMarkable).
 # Echoes (the other tablet reporting what we just told it to do) are recognised and dropped.
 . /home/root/dualrm/dualrm-lib.sh
 KEY=$D/id_dualrm
@@ -397,7 +400,7 @@ on_doc() { # side uuid ft path
         req "$y" open "$target" >/dev/null || { put EXPDOC "$y" ""; PENDING=""; MODE=""; return; }
     fi
     log "$x opened '$(echo "$4" | tr "$US" /)' ($3) -> $y $target, $MODE mode"
-    [ -z "$PENDING" ] && pages_sync "$x" -1 0
+    [ -z "$PENDING" ] && { pages_sync "$x" -1 0; pen_align; }
 }
 
 on_page() { # side uuid pagecount currentpage
@@ -407,7 +410,7 @@ on_page() { # side uuid pagecount currentpage
     [ -n "$MODE" ] || return
     if [ -n "$PENDING" ]; then
         # the other tablet finished opening its counterpart: line it up with the leader
-        [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && { PENDING=""; pages_sync "$LEAD" -1 0; }
+        [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && { PENDING=""; pages_sync "$LEAD" -1 0; pen_align; }
         return
     fi
     now
@@ -422,6 +425,49 @@ on_page() { # side uuid pagecount currentpage
     pages_sync "$x" "$q" "$qc"
 }
 
+# ---------------------------------------------------------------- pens and sleep
+PENSET_main=""; PENSET_sub=""   # settings we last gave each tablet, and when: its report of
+PENSETT_main=0; PENSETT_sub=0   # them right after is an echo
+PENT=0                          # when the main's settings were last given to the sub
+pen_align() { # a pair is open on both: the main's pen settings win
+    st=$(req main pen) && [ -n "$st" ] || return
+    now; PENT=$NOW
+    PENSET_sub=$st; PENSETT_sub=$NOW
+    req sub setpen "$st" >/dev/null && log "pens: main -> sub"
+}
+
+on_pen() { # side json
+    x=$1; y=$(other "$x")
+    [ -n "$MODE" ] && [ -z "$PENDING" ] && [ -n "$(get DOC "$y")" ] || return
+    now
+    [ "$2" = "$(get PENSET "$x")" ] && [ $((NOW - $(get PENSETT "$x"))) -le 3 ] && return
+    # the sub changing right as the main's settings arrive: keep the main's
+    [ "$x" = sub ] && [ $((NOW - PENT)) -le 2 ] && return
+    [ "$x" = main ] && PENT=$NOW
+    put PENSET "$y" "$2"; put PENSETT "$y" "$NOW"
+    req "$y" setpen "$2" >/dev/null && log "pens: $x -> $y"
+}
+
+SLEEPT=-100
+on_sleep() { # side: x is going to sleep
+    x=$1; y=$(other "$x")
+    now
+    [ $((NOW - SLEEPT)) -le 20 ] && return      # we put it to sleep (or it follows the other one)
+    SLEEPT=$NOW
+    [ "$y" = sub ] || [ "$LINK" = 1 ] || return
+    req "$y" sleep >/dev/null && log "$x went to sleep -> $y too"
+}
+
+on_wake() { # side
+    # the sub's link may be stuck on a session that died while either tablet slept: start over
+    [ "$1" = sub ] || return
+    for pd in /proc/[0-9]*; do
+        case "$(tr '\0' ' ' < "$pd/cmdline" 2>/dev/null)" in
+            ssh\ *dualrm-link.sh*) kill "${pd#/proc/}" 2>/dev/null ;;
+        esac
+    done
+}
+
 close_pending() { # the document on CLOSING_FROM stayed closed: close the other side too
     x=$CLOSING_FROM; CLOSING_FROM=""; y=$(other "$x")
     [ -n "$(get DOC "$x")" ] && return
@@ -434,7 +480,7 @@ close_pending() { # the document on CLOSING_FROM stayed closed: close the other 
 
 # ---------------------------------------------------------------- main loop
 link_loop &
-log "sync v8 (event driven, both ways, copies PDFs and annotations)"
+log "sync v9 (event driven, both ways, copies PDFs and annotations, pens, sleep)"
 CLOSING_FROM=""
 local_request emit >/dev/null
 while :; do
@@ -456,6 +502,9 @@ while :; do
         PAGE\ *)
             set -f; set -- $body; set +f
             on_page "$side" "$2" "$3" "$4" ;;
+        PEN\ *) on_pen "$side" "${body#PEN }" ;;
+        SLEEP) on_sleep "$side" ;;
+        WAKE) on_wake "$side" ;;
         LINKUP)
             LINK=1; log "link up"
             remote_request emit >/dev/null ;;
