@@ -1,6 +1,9 @@
-# Copy to /home/root/dualrm/dualrm.conf on the sub tablet.
-# WiFi address of the main tablet (used when no USB link is up). Leave empty for USB only.
-MAIN_LAN=192.168.1.50
+# /home/root/dualrm/dualrm.conf on the sub tablet (install.sh creates it on first install).
+# Restart the sync after a change: systemctl restart dualrm-sync
+
+# WiFi address of the main tablet, used when no USB link is up. Empty: USB cable only.
+# Give the main a fixed address in your router (DHCP reservation). Example: MAIN_LAN=192.168.1.50
+MAIN_LAN=
 
 # Book mode (PDF/EPUB present on both tablets)
 BOOK_LEFT=main      # tablet showing the left page: main | sub

@@ -1,34 +1,86 @@
 #!/bin/sh
-# Install (or update) dual-rM on both tablets from a PC.
+# Install (or update) remarkabook on two reMarkable 2 tablets from a PC.
 #
-#   ./install.sh <sub-ssh-target> <main-ssh-target> [main-wifi-ip]
+#   ./install.sh [-y] <sub-ssh-target> <main-ssh-target> [main-wifi-ip]
 #
+#   sub           the tablet that runs the sync (and is the USB host when cabled)
+#   main          the other tablet
 #   targets       anything ssh accepts, e.g. root@10.11.99.1 or a ~/.ssh/config alias
-#   main-wifi-ip  written to the sub's dualrm.conf as MAIN_LAN on first install (optional)
+#   main-wifi-ip  written to the sub's dualrm.conf as MAIN_LAN on first install (optional;
+#                 without it the tablets only find each other over a USB cable)
+#   -y            do not ask before restarting xochitl
 #
 # Requires xovi + qt-resource-rebuilder (with a hashtab for the installed firmware) on BOTH.
 # Does NOT touch the device tree (see pogo/README.md).
 # Safe to re-run: files are overwritten, the key and dualrm.conf are kept.
 # Each run restarts xochitl once per tablet (xochitl allows 4 starts per 10 minutes).
 set -e
-SUB=${1:?usage: $0 <sub-ssh-target> <main-ssh-target> [main-wifi-ip]}
-MAIN=${2:?usage: $0 <sub-ssh-target> <main-ssh-target> [main-wifi-ip]}
-MAIN_LAN=${3:-}
+TESTED="3.23 3.29"      # firmware versions this was tested with (major.minor)
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
+
+YES=0
+[ "$1" = -h ] || [ "$1" = --help ] && usage 0
+[ "$1" = -y ] && { YES=1; shift; }
+[ $# -ge 2 ] || usage
+SUB=$1; MAIN=$2; MAIN_LAN=${3:-}
 cd "$(dirname "$0")"
 
-node() { # target extra-files-from-sub/...
+# ---------------------------------------------------------------- checks
+check() { # target role -> prints the firmware version; exits on a blocking problem
+    out=$(ssh -o ConnectTimeout=10 "$1" sh -s <<'EOF'
+m=$(tr -d '\0' < /sys/devices/soc0/machine 2>/dev/null)
+v=$(sed -n 's/^IMG_VERSION="\{0,1\}\([0-9][0-9.]*\).*/\1/p' /etc/os-release 2>/dev/null)
+[ -n "$v" ] || v=$(sed -n 's/^REMARKABLE_RELEASE_VERSION=//p' /usr/share/remarkable/update.conf 2>/dev/null)
+echo "machine=$m"
+echo "version=$v"
+X=/home/root/xovi
+[ -f $X/xovi.so ] && [ -f $X/start ] || echo "missing=xovi (/home/root/xovi/xovi.so, start)"
+[ -f $X/extensions.d/qt-resource-rebuilder.so ] || echo "missing=qt-resource-rebuilder"
+[ -f $X/exthome/qt-resource-rebuilder/hashtab ] || echo "missing=hashtab (run /home/root/xovi/rebuild_hashtable)"
+command -v systemctl >/dev/null || echo "missing=systemd"
+EOF
+) || { echo "cannot reach the $2 ($1) over ssh" >&2; exit 1; }
+    m=$(echo "$out" | sed -n 's/^machine=//p'); v=$(echo "$out" | sed -n 's/^version=//p')
+    case "$m" in
+        "reMarkable 2"*) ;;
+        *) echo "the $2 ($1) is '${m:-unknown}': only the reMarkable 2 is supported" >&2; exit 1 ;;
+    esac
+    if echo "$out" | grep -q '^missing='; then
+        echo "the $2 ($1) is not ready:" >&2
+        echo "$out" | sed -n 's/^missing=/  - /p' >&2
+        exit 1
+    fi
+    mm=$(echo "$v" | cut -d. -f1,2)
+    case " $TESTED " in
+        *" $mm "*) ;;
+        *) echo "warning: the $2 runs firmware ${v:-unknown}, not tested (tested: $TESTED)." >&2
+           echo "         If xochitl misbehaves, run /home/root/xovi/stock on it and see README." >&2 ;;
+    esac
+    echo "$2: $m, firmware ${v:-unknown}"
+}
+check "$MAIN" main
+check "$SUB" sub
+idm=$(ssh "$MAIN" cat /etc/machine-id 2>/dev/null || :); ids=$(ssh "$SUB" cat /etc/machine-id 2>/dev/null || :)
+if [ -n "$idm" ] && [ "$idm" = "$ids" ]; then echo "main and sub are the same tablet" >&2; exit 1; fi
+
+if [ $YES = 0 ]; then
+    printf 'This restarts xochitl on both tablets (open documents are saved). Continue? [y/N] '
+    read -r a
+    case "$a" in y|Y|yes) ;; *) echo "aborted"; exit 1 ;; esac
+fi
+
+# ---------------------------------------------------------------- both tablets
+install_node() { # target extra-files-from-sub/...
     t=$1; shift
-    ssh "$t" 'mkdir -p /home/root/dualrm && test -d /home/root/xovi/exthome/qt-resource-rebuilder' \
-        || { echo "xovi/qt-resource-rebuilder not found on $t" >&2; exit 1; }
     tar cf - -C node dualrm-lib.sh dualrm-ev.sh dualrm-cmd.sh dualrm-link.sh systemd xovi \
         -C ../sub "$@" | ssh "$t" 'rm -rf /tmp/dualrm-install && mkdir /tmp/dualrm-install && tar xf - -C /tmp/dualrm-install'
     ssh "$t" sh -s <<'EOF'
 set -e
 D=/home/root/dualrm; T=/tmp/dualrm-install
+mkdir -p "$D"
 cp "$T"/dualrm-*.sh "$D"/
 chmod +x "$D"/*.sh
 cp "$T"/xovi/dualrm.qmd /home/root/xovi/exthome/qt-resource-rebuilder/
-rm -f /home/root/xovi/exthome/qt-resource-rebuilder/dualrm-open.qmd   # replaced by dualrm.qmd
 cp "$T"/systemd/dualrm-ev.socket "$T"/systemd/dualrm-ev@.service \
    "$T"/systemd/dualrm-cmd.socket "$T"/systemd/dualrm-cmd@.service "$T"/systemd/dualrm-xovi.service \
    /etc/systemd/system/
@@ -39,11 +91,14 @@ EOF
 }
 
 # main: event/command sockets, link end, patch
-node "$MAIN" systemd/dualrm-xovi.service
+echo "installing on the main ($MAIN)"
+install_node "$MAIN" systemd/dualrm-xovi.service
 ssh "$MAIN" 'rm -rf /tmp/dualrm-install; systemctl restart dualrm-xovi'
 
 # sub: the same, plus sync, USB role switching and the pogo helpers
-node "$SUB" dualrm-sync.sh dualrm-usbrole.sh dualrm-pogo.sh dualrm.conf.example systemd etc
+echo "installing on the sub ($SUB)"
+logn=$(ssh "$SUB" 'wc -l < /home/root/dualrm/sync.log 2>/dev/null || echo 0')
+install_node "$SUB" dualrm-sync.sh dualrm-usbrole.sh dualrm-pogo.sh dualrm.conf.example systemd etc
 ssh "$SUB" "MAIN_LAN='$MAIN_LAN' sh -s" <<'EOF'
 set -e
 D=/home/root/dualrm; T=/tmp/dualrm-install
@@ -53,10 +108,10 @@ cp "$T"/systemd/usb-ether-once-dualrm.conf /etc/systemd/system/usb-ether-once.se
 cp "$T"/etc/dualrm-fix-udc.sh /etc/
 cp "$T"/etc/05-dualrm-host.network /etc/systemd/network/
 if [ ! -f "$D/dualrm.conf" ]; then
-    if [ -n "$MAIN_LAN" ]; then echo "MAIN_LAN=$MAIN_LAN" > "$D/dualrm.conf"
-    else cp "$T"/dualrm.conf.example "$D/dualrm.conf"; fi
+    cp "$T"/dualrm.conf.example "$D/dualrm.conf"
+    [ -n "$MAIN_LAN" ] && sed -i "s/^MAIN_LAN=.*/MAIN_LAN=$MAIN_LAN/" "$D/dualrm.conf"
 fi
-rm -rf "$T" "$D/dualrm-agent.sh" "$D/request"
+rm -rf "$T"
 [ -f "$D/id_dualrm" ] || dropbearkey -t ed25519 -f "$D/id_dualrm" >/dev/null
 dropbearkey -y -f "$D/id_dualrm" | grep '^ssh-' > "$D/id_dualrm.pub"
 
@@ -69,10 +124,22 @@ systemctl restart dualrm-xovi     # reload xochitl with the patch
 systemctl restart dualrm-usbrole dualrm-sync
 EOF
 
+# ---------------------------------------------------------------- the sub may log in to the main
 key=$(ssh "$SUB" cat /home/root/dualrm/id_dualrm.pub)
-if ssh "$MAIN" "grep -qF '$key' /home/root/.ssh/authorized_keys 2>/dev/null"; then
-    echo "installed; the sub's key is already authorized on the main."
-else
-    echo "installed. Add this key to the MAIN's /home/root/.ssh/authorized_keys:"
-    echo "$key"
-fi
+ssh "$MAIN" "mkdir -p /home/root/.ssh && chmod 700 /home/root/.ssh &&
+    { grep -qxF '$key' /home/root/.ssh/authorized_keys 2>/dev/null ||
+      echo '$key' >> /home/root/.ssh/authorized_keys; } && chmod 600 /home/root/.ssh/authorized_keys"
+echo "the sub's key is authorized on the main"
+
+echo "waiting for the link..."
+i=0
+while [ $i -lt 20 ]; do
+    if ssh "$SUB" "tail -n +$((logn + 1)) /home/root/dualrm/sync.log 2>/dev/null | grep -q 'link up'"; then
+        echo "done: the tablets are linked. Open a document on either one."
+        exit 0
+    fi
+    sleep 2; i=$((i + 1))
+done
+echo "installed, but no link yet. Check the sub's log:"
+echo "  ssh $SUB tail -n 20 /home/root/dualrm/sync.log"
+[ -n "$MAIN_LAN" ] || echo "(no main-wifi-ip given: the tablets only link over a USB cable, see README)"
