@@ -3,6 +3,7 @@
 #   GET /ev?DOC%20<uuid>|-          a document was opened / closed here
 #   GET /ev?PAGE%20<uuid> <pc> <cp> page count / current page changed
 #   GET /ev?PEN%20<json>            tool settings changed
+#   GET /ev?SCROLL%20<uuid> <pg> <y> notebook page scrolled (scene y at the top of the view)
 #   GET /ev?SLEEP / WAKE            this tablet goes to sleep / woke up
 #   GET /ev?RESP%20<nonce> <text>   answer to the command in $D/cmd
 . /home/root/dualrm/dualrm-lib.sh
@@ -23,7 +24,7 @@ case "$msg" in
     DOC\ *)
         u=${msg#DOC }
         out="EV DOC $u $(doc_type "$u") $(doc_path "$u")" ;;
-    PAGE\ *|PEN\ *|SLEEP|WAKE)
+    PAGE\ *|PEN\ *|SCROLL\ *|SLEEP|WAKE)
         out="EV $msg" ;;
 esac
 # hand on before answering, so events stay in order (the patch sends them one at a time)

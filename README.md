@@ -18,6 +18,9 @@ Open a document on either tablet and the other one follows:
   from the tablet that opened the document before the other one opens it, and both ways once
   it is closed. The newer file wins; a replaced file is kept in `dualrm/backup/` on that tablet
   for 30 days. Annotations go over the dual-rM link only, not the reMarkable cloud.
+- **Scrolling (notebooks)**: scrolling a notebook page on one tablet scrolls the same page on
+  the other to the same height, once the scroll settles (about half a second). Zoom stays per
+  tablet. PDF / EPUB pages are not followed.
 - **Pens**: changing pen, colour or width on one tablet changes it on the other (which pen
   is in hand stays per tablet). When a pair opens, the main's settings win.
 - **Sleep**: putting one tablet to sleep puts the other to sleep too (the sync presses its
@@ -49,6 +52,7 @@ qt-resource-rebuilder.
 | PDF / EPUB missing on one tablet: copied over | works |
 | Annotations of book-mode documents, both ways | works (on close; not live) |
 | Pen settings follow, both ways (main wins at open) | works |
+| Notebook scroll position follows, both ways | works |
 | Sleep together | works |
 | Link over home WiFi | works |
 | Link over one USB cable (no WiFi) | works, see [USB cable](#usb-cable) |
@@ -61,8 +65,8 @@ Nothing polls. Both tablets run the same pieces (`node/`):
 - **`dualrm.qmd`**, a qt-resource-rebuilder patch for xochitl. It reports document and page
   changes the moment they happen (`GET http://127.0.0.1:7781/ev?...`) and takes commands
   over a held request (`GET http://127.0.0.1:7782/next`): `open`, `close`, `status`,
-  `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`, `pen`, `setpen`;
-  events `DOC`, `PAGE`, `PEN`, `SLEEP`, `WAKE`.
+  `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`, `pen`, `setpen`,
+  `setscroll`; events `DOC`, `PAGE`, `PEN`, `SCROLL`, `SLEEP`, `WAKE`.
 - **`dualrm-ev.sh` / `dualrm-cmd.sh`** behind systemd socket units (`Accept=yes`), so a
   shell only runs while an event or command is in flight.
 - **`dualrm-link.sh`** is the main's end of the ssh session: it forwards the main's events

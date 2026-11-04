@@ -2,6 +2,8 @@
 ; Nothing polls: events go out as they happen, commands come in over a held (long-poll) request.
 ;   events  -> GET http://127.0.0.1:7781/ev?DOC <uuid>|-  /  PAGE <uuid> <pageCount> <currentPage>
 ;              PEN <tool settings as JSON>  (pen, colour or width changed in the open document)
+;              SCROLL <uuid> <page> <top>   (notebook page scrolled: scene y at the top of the view,
+;                                            reported once it settles; not after setscroll)
 ;              SLEEP / WAKE                 (this tablet goes to sleep / woke up)
 ;   command <- GET http://127.0.0.1:7782/next  answered with "<nonce> <command...>":
 ;     open <uuid>
@@ -16,6 +18,7 @@
 ;     import <parentUuid|-> <file path...>  (import a PDF/EPUB into the library; gets a new id)
 ;     pen                     -> ok <tool settings as JSON> of the open document
 ;     setpen <JSON>           (apply tool settings from the other tablet; keeps the active tool)
+;     setscroll <page> <top>  (notebook pages only: scroll so scene y <top> is at the top of the view)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
@@ -89,6 +92,17 @@ AFFECT /qml/device/view/main/MainView.qml
                     function onDualrmPenChanged() {
                         if (documentView.item?.document) {
                             dualrmPoller.ev("PEN " + documentView.item.dualrmPenState());
+                        }
+                    }
+                }
+                Connections {
+                    target: documentView.item
+                    ignoreUnknownSignals: true
+                    function onDualrmScrollChanged() {
+                        const d = documentView.item?.document;
+                        if (d) {
+                            dualrmPoller.ev("SCROLL " + String(d.id) + " " + documentView.item.dualrmScrollPage
+                                    + " " + Math.round(documentView.item.dualrmScrollTop));
                         }
                     }
                 }
@@ -244,6 +258,14 @@ AFFECT /qml/device/view/main/MainView.qml
                             respond(nonce, "ok " + documentView.item.dualrmPenState());
                             return;
                         }
+                        if (cmd === "setscroll") {
+                            if (!documentView.item?.document) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            respond(nonce, documentView.item.dualrmSetScroll(parseInt(parts[2]), parseFloat(parts[3])));
+                            return;
+                        }
                         if (cmd === "import") {
                             if (typeof DocumentImporter === "undefined") {
                                 respond(nonce, "error no-importer");
@@ -266,7 +288,7 @@ AFFECT /qml/device/view/main/MainView.qml
     END TRAVERSE
 END AFFECT
 
-; Batched page append and pen settings inside DocumentView (DocumentController, DeviceScreenInfo
+; Batched page append, pen settings and notebook scrolling inside DocumentView (DocumentController, DeviceScreenInfo
 ; and the DocumentToolSettings documentViewTools are in scope there).
 AFFECT /qml/device/view/documentview/DocumentView.qml
     TRAVERSE FocusScope
@@ -314,6 +336,82 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 dualrmPenQuiet = true;
                 documentViewTools.setToolSettings(settings);
                 dualrmPenQuietEnd.restart();
+            }
+
+            // Notebook scroll position: the scene y at the top of the view, reported once it settles.
+            // A position set by dualrmSetScroll is not reported back. Opening a page restores the
+            // page's own saved position once its tiles are ready, so for 3 s a position that was set
+            // is applied again whenever the view settles somewhere else.
+            signal dualrmScrollChanged()
+            property real dualrmScrollTop: NaN       // last reported or applied top
+            property int dualrmScrollPage: -1
+            property var dualrmScrollWant: null      // { page, top, until }: re-apply once at settle
+            Timer {
+                id: dualrmScrollSettle
+                interval: 400
+                onTriggered: {
+                    const t = dualrmScrollNow();
+                    if (isNaN(t)) {
+                        return;
+                    }
+                    // until it expires, a position from the other tablet wins over a late restore
+                    const w = dualrmScrollWant;
+                    if (w && (w.page !== currentPage || Date.now() >= w.until)) {
+                        dualrmScrollWant = null;
+                    } else if (w && Math.abs(t - w.top) >= 2) {
+                        dualrmScrollMove(w.top);
+                        return;
+                    }
+                    if (currentPage === dualrmScrollPage && Math.abs(t - dualrmScrollTop) < 2) {
+                        return;
+                    }
+                    dualrmScrollTop = t;
+                    dualrmScrollPage = currentPage;
+                    dualrmScrollChanged();
+                }
+            }
+            Connections {
+                target: sceneView.tileManager
+                ignoreUnknownSignals: true
+                function onTransformChanged() {
+                    if (notePage) {
+                        dualrmScrollSettle.restart();
+                    }
+                }
+            }
+            Connections {
+                target: sceneView
+                ignoreUnknownSignals: true
+                function onPageChanged() { dualrmScrollSettle.restart(); }
+                function onTileManagerChanged() { dualrmScrollSettle.restart(); }
+            }
+            function dualrmScrollNow() {
+                const tm = sceneView.tileManager;
+                if (!document || !notePage || !tm) {
+                    return NaN;
+                }
+                return tm.viewToScene(Qt.point(0, 0)).y;
+            }
+            function dualrmScrollMove(top) {
+                const tm = sceneView.tileManager;
+                const cur = tm.viewToScene(Qt.point(0, 0)).y;
+                dualrmScrollTop = top;
+                dualrmScrollPage = currentPage;
+                if (Math.abs(top - cur) >= 1) {
+                    tm.moveViewBy(Qt.point(0, (cur - top) * tm.scale));   // negative y scrolls down
+                    sceneView.scrollPositionChanged = true;               // remembered for this page
+                }
+                return cur;
+            }
+            function dualrmSetScroll(page, top) {
+                if (isNaN(dualrmScrollNow())) {
+                    return "error not-a-notebook-page";
+                }
+                if (currentPage !== page) {
+                    return "error on-page " + currentPage;
+                }
+                dualrmScrollWant = { page: page, top: top, until: Date.now() + 3000 };
+                return "ok " + Math.round(dualrmScrollMove(top));
             }
 
             function dualrmEnsurePages(count, target) {

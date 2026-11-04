@@ -21,7 +21,8 @@
 # that opened the document before the other one opens it, and both ways once it is closed.
 # The newer file wins; a replaced file is kept in $D/backup/ on the tablet it was replaced on.
 # Pen settings (pen, colour, width) of paired documents follow each other; when a pair opens,
-# the main's settings win. Going to sleep on one tablet puts the other to sleep too (waking
+# the main's settings win. Scrolling a notebook page on one tablet scrolls the same page on the
+# other (notebooks only, not PDF/EPUB). Going to sleep on one tablet puts the other to sleep too (waking
 # up is per tablet: only the power button wakes a reMarkable).
 # Echoes (the other tablet reporting what we just told it to do) are recognised and dropped.
 . /home/root/dualrm/dualrm-lib.sh
@@ -42,6 +43,7 @@ exec 3<> "$D/events"    # read end (opened read-write so it never sees EOF)
 exec 4<> "$D/linkin"    # commands to the main; the ssh session reads the other end
 
 now() { read -r up _ < /proc/uptime; NOW=${up%.*}; }
+tick() { read -r up _ < /proc/uptime; TICK=${up%.*}${up#*.}; }   # uptime in 1/100 s
 
 # ---------------------------------------------------------------- link to the main
 ROLE=$(ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role 2>/dev/null | head -n 1)
@@ -294,7 +296,7 @@ book_end() { # book mode is over: copy annotations both ways once both have save
 
 goto() { # side page: show page on side unless it is there already
     [ "$(get CP "$1")" = "$2" ] && return 0
-    now; put EXPPG "$1" "$2"; put EXPT "$1" "$NOW"
+    now; put EXPPG "$1" "$2"; put EXPT "$1" "$NOW"; moved "$1"
     req "$1" gotopage "$2" >/dev/null
 }
 
@@ -332,10 +334,10 @@ pages_sync() { # side oldpage oldcount: side's pages changed; bring the other ta
         mirror)
             if [ "$pc" -eq $((qc + 1)) ] && [ "$ypc" -eq "$qc" ] && [ "$cp" -ge 1 ] && [ "$cp" -lt "$pc" ]; then
                 # one page inserted at cp: insert at the same place
-                now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"
+                now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
                 req "$y" addpage "$cp" >/dev/null && log "$y: inserted page at $cp"
             elif [ "$ypc" -lt "$pc" ]; then
-                now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"
+                now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
                 t=$(req "$y" ensure "$pc" "$cp") && [ "$t" -gt "$ypc" ] && { put PC "$y" "$t"; log "$y: $((t - ypc)) page(s) added -> $t"; }
             else
                 goto "$y" "$cp"
@@ -367,7 +369,7 @@ on_doc() { # side uuid ft path
         [ -n "$MODE" ] && { now; CLOSING_FROM=$x; CLOSET=$NOW; }
         return
     fi
-    put DOC "$x" "$u"; put FT "$x" "$3"; put PC "$x" 0; put CP "$x" -1
+    put DOC "$x" "$u"; put FT "$x" "$3"; put PC "$x" 0; put CP "$x" -1; put SCR "$x" ""
     if [ "$u" = "$(get EXPDOC "$x")" ]; then
         put EXPDOC "$x" ""      # pairing finishes with its first PAGE report (on_page)
         return
@@ -396,11 +398,11 @@ on_doc() { # side uuid ft path
     if [ "$(get DOC "$y")" = "$target" ]; then
         PENDING=""
     else
-        PENDING=$y; put EXPDOC "$y" "$target"
+        PENDING=$y; put EXPDOC "$y" "$target"; moved "$y"
         req "$y" open "$target" >/dev/null || { put EXPDOC "$y" ""; PENDING=""; MODE=""; return; }
     fi
     log "$x opened '$(echo "$4" | tr "$US" /)' ($3) -> $y $target, $MODE mode"
-    [ -z "$PENDING" ] && { pages_sync "$x" -1 0; pen_align; }
+    [ -z "$PENDING" ] && { pages_sync "$x" -1 0; pen_align; scroll_to "$y" "$(get SCR "$x")"; }
 }
 
 on_page() { # side uuid pagecount currentpage
@@ -410,7 +412,8 @@ on_page() { # side uuid pagecount currentpage
     [ -n "$MODE" ] || return
     if [ -n "$PENDING" ]; then
         # the other tablet finished opening its counterpart: line it up with the leader
-        [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && { PENDING=""; pages_sync "$LEAD" -1 0; pen_align; }
+        [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && {
+            PENDING=""; pages_sync "$LEAD" -1 0; pen_align; scroll_to "$(other "$LEAD")" "$(get SCR "$LEAD")"; }
         return
     fi
     now
@@ -423,6 +426,31 @@ on_page() { # side uuid pagecount currentpage
     fi
     [ "$3" = "$qc" ] && [ "$4" = "$q" ] && return
     pages_sync "$x" "$q" "$qc"
+}
+
+# ---------------------------------------------------------------- notebook scrolling
+# A notebook page scrolled on one tablet is scrolled to the same place on the other (mirror
+# mode only: PDF/EPUB pages are not followed). A tablet we just opened, paged or scrolled
+# reports where it settles: those reports are dropped for SCROLL_QUIET.
+SCR_main=""; SCR_sub=""         # "<page> <top>" each tablet last reported
+SCRT_main=0; SCRT_sub=0         # when we last moved each tablet (1/100 s)
+SCROLL_QUIET=250
+moved() { tick; put SCRT "$1" "$TICK"; }
+
+scroll_to() { # side "<page> <top>": scroll side's page like the other tablet's
+    _y=$1; set -f; set -- $2; set +f
+    [ "$MODE" = mirror ] && [ -z "$PENDING" ] && [ -n "$2" ] || return 0
+    [ "$(get CP "$_y")" = "$1" ] || [ "$(get EXPPG "$_y")" = "$1" ] || return 0
+    moved "$_y"
+    req "$_y" setscroll "$1" "$2" >/dev/null
+}
+
+on_scroll() { # side uuid page top
+    [ "$2" = "$(get DOC "$1")" ] || return
+    put SCR "$1" "$3 $4"
+    [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
+    tick; [ $((TICK - $(get SCRT "$1"))) -lt $SCROLL_QUIET ] && return
+    scroll_to "$(other "$1")" "$3 $4"
 }
 
 # ---------------------------------------------------------------- pens and sleep
@@ -484,7 +512,7 @@ close_pending() { # the document on CLOSING_FROM stayed closed: close the other 
 
 # ---------------------------------------------------------------- main loop
 link_loop &
-log "sync v9 (event driven, both ways, copies PDFs and annotations, pens, sleep)"
+log "sync v10 (event driven, both ways, copies PDFs and annotations, pens, notebook scroll, sleep)"
 CLOSING_FROM=""
 local_request emit >/dev/null
 while :; do
@@ -507,6 +535,9 @@ while :; do
             set -f; set -- $body; set +f
             on_page "$side" "$2" "$3" "$4" ;;
         PEN\ *) on_pen "$side" "${body#PEN }" ;;
+        SCROLL\ *)
+            set -f; set -- $body; set +f
+            on_scroll "$side" "$2" "$3" "$4" ;;
         SLEEP) on_sleep "$side" ;;
         WAKE) on_wake "$side" ;;
         LINKUP)
