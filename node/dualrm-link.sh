@@ -19,7 +19,9 @@ fwd=$!
 echo "$$ $hb $fwd" > "$D/events.reader"
 cleanup() {
     kill $hb $fwd 2>/dev/null
-    [ "$(cat "$D/events.reader" 2>/dev/null)" = "$$ $hb $fwd" ] && rm -f "$D/events.reader"
+    [ "$(cat "$D/events.reader" 2>/dev/null)" = "$$ $hb $fwd" ] || return
+    rm -f "$D/events.reader"
+    local_post "L$$ pagestep 1"     # the sub is gone: page turns step one page again
 }
 trap cleanup EXIT
 trap 'exit 0' TERM HUP

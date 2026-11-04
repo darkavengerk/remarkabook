@@ -21,7 +21,8 @@
 # that opened the document before the other one opens it, and both ways once it is closed.
 # The newer file wins; a replaced file is kept in $D/backup/ on the tablet it was replaced on.
 # Pen settings (pen, colour, width) of paired documents follow each other; when a pair opens,
-# the main's settings win. Scrolling a notebook page on one tablet scrolls the same page on the
+# the main's settings win. In book mode a page turn by hand moves two pages at once on either
+# tablet (one page alone). Scrolling a notebook page on one tablet scrolls the same page on the
 # other (notebooks only, not PDF/EPUB). Going to sleep on one tablet puts the other to sleep too (waking
 # up is per tablet: only the power button wakes a reMarkable).
 # Echoes (the other tablet reporting what we just told it to do) are recognised and dropped.
@@ -312,9 +313,11 @@ book_sync() { # side oldpage: side moved; put both tablets on the right spread
     [ "$p" -ge 0 ] 2>/dev/null || return
     s=$(spread "$p")
     if [ "$(rolepage "$x" "$s")" != "$p" ]; then
-        # landed on the other tablet's page: one page turned = one spread turned
-        if [ "$q" -ge 0 ] 2>/dev/null && [ "$p" -gt "$q" ]; then s=$(( $(spread "$q") + 1 ))
-        elif [ "$q" -ge 0 ] 2>/dev/null && [ "$p" -lt "$q" ]; then s=$(( $(spread "$q") - 1 ))
+        # landed on the other tablet's page. One page turned (a tablet still stepping one page
+        # at a time) = one spread turned; a jump (page list, search, link) = the spread showing
+        # that page, which then is on the other tablet.
+        if [ "$q" -ge 0 ] 2>/dev/null && [ "$p" -eq $((q + 1)) ]; then s=$(( $(spread "$q") + 1 ))
+        elif [ "$q" -ge 0 ] 2>/dev/null && [ "$p" -eq $((q - 1)) ]; then s=$(( $(spread "$q") - 1 ))
         fi
     fi
     [ "$s" -lt 0 ] && s=0
@@ -324,6 +327,11 @@ book_sync() { # side oldpage: side moved; put both tablets on the right spread
     [ "$tx" -ge 0 ] && [ "$tx" != "$p" ] && goto "$x" "$tx"
     [ "$ty" -ge 0 ] && goto "$y" "$ty"
     log "book: spread $s ($BOOK_LEFT left)"
+}
+
+step_align() { # a pair is open on both: in book mode a page turn on either tablet moves two pages
+    [ "$MODE" = book ] || return 0
+    req main pagestep 2 >/dev/null && req sub pagestep 2 >/dev/null && log "book: page turns step 2"
 }
 
 pages_sync() { # side oldpage oldcount: side's pages changed; bring the other tablet along
@@ -402,7 +410,7 @@ on_doc() { # side uuid ft path
         req "$y" open "$target" >/dev/null || { put EXPDOC "$y" ""; PENDING=""; MODE=""; return; }
     fi
     log "$x opened '$(echo "$4" | tr "$US" /)' ($3) -> $y $target, $MODE mode"
-    [ -z "$PENDING" ] && { pages_sync "$x" -1 0; pen_align; scroll_to "$y" "$(get SCR "$x")"; }
+    [ -z "$PENDING" ] && { pages_sync "$x" -1 0; pen_align; step_align; scroll_to "$y" "$(get SCR "$x")"; }
 }
 
 on_page() { # side uuid pagecount currentpage
@@ -413,7 +421,7 @@ on_page() { # side uuid pagecount currentpage
     if [ -n "$PENDING" ]; then
         # the other tablet finished opening its counterpart: line it up with the leader
         [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && {
-            PENDING=""; pages_sync "$LEAD" -1 0; pen_align; scroll_to "$(other "$LEAD")" "$(get SCR "$LEAD")"; }
+            PENDING=""; pages_sync "$LEAD" -1 0; pen_align; step_align; scroll_to "$(other "$LEAD")" "$(get SCR "$LEAD")"; }
         return
     fi
     now
@@ -544,6 +552,8 @@ while :; do
             LINK=1; AWAKE_main=1; log "link up"
             remote_request emit >/dev/null ;;
         LINKDOWN)
+            # alone again: page turns step one page (the main's link end does the same there)
+            [ "$MODE" = book ] && local_request pagestep 1 >/dev/null
             LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM="" ;;
     esac
 done

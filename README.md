@@ -9,7 +9,9 @@ Open a document on either tablet and the other one follows:
   page.
 - **PDF / EPUB present on both tablets** (same document, e.g. through the reMarkable
   cloud): **book mode**. One tablet shows the left page, the other the right page. Turning a
-  page on either tablet turns the spread on both.
+  page on either tablet turns the spread on both: in book mode a swipe or page key moves two
+  pages at once (one screen refresh); jumping to a page (page list, search, link) opens the
+  spread that holds it. A tablet on its own turns one page at a time.
 - **PDF / EPUB only on one tablet**: it is copied to the other tablet (same folder path,
   imported with xochitl's own importer, no restart) and opened there in book mode. The copy
   gets its own document id; the pair is remembered in the sub's `dualrm/pairs`. If the copy
@@ -49,6 +51,7 @@ qt-resource-rebuilder.
 | Open / close follows, both ways | works |
 | Notebook page count / current page, both ways | works (pages are added, never deleted) |
 | Book mode for PDFs on both tablets | works |
+| Book mode page turn in one step (no turn-and-correct) | new, not yet tested on the tablets |
 | PDF / EPUB missing on one tablet: copied over | works |
 | Annotations of book-mode documents, both ways | works (on close; not live) |
 | Pen settings follow, both ways (main wins at open) | works |
@@ -66,7 +69,7 @@ Nothing polls. Both tablets run the same pieces (`node/`):
   changes the moment they happen (`GET http://127.0.0.1:7781/ev?...`) and takes commands
   over a held request (`GET http://127.0.0.1:7782/next`): `open`, `close`, `status`,
   `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`, `pen`, `setpen`,
-  `setscroll`; events `DOC`, `PAGE`, `PEN`, `SCROLL`, `SLEEP`, `WAKE`.
+  `setscroll`, `pagestep`; events `DOC`, `PAGE`, `PEN`, `SCROLL`, `SLEEP`, `WAKE`.
 - **`dualrm-ev.sh` / `dualrm-cmd.sh`** behind systemd socket units (`Accept=yes`), so a
   shell only runs while an event or command is in flight.
 - **`dualrm-link.sh`** is the main's end of the ssh session: it forwards the main's events

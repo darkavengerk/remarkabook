@@ -19,6 +19,8 @@
 ;     pen                     -> ok <tool settings as JSON> of the open document
 ;     setpen <JSON>           (apply tool settings from the other tablet; keeps the active tool)
 ;     setscroll <page> <top>  (notebook pages only: scroll so scene y <top> is at the top of the view)
+;     pagestep <n>            (a page turn by hand moves n pages: 2 in book mode; back to 1 when
+;                              another document opens or the tablet wakes up)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
@@ -78,7 +80,10 @@ AFFECT /qml/device/view/main/MainView.qml
                 Connections {
                     target: documentView.item
                     ignoreUnknownSignals: true
-                    function onDocumentChanged() { dualrmPoller.emitState(); }
+                    function onDocumentChanged() {
+                        documentView.item.dualrmPageStep = 1;
+                        dualrmPoller.emitState();
+                    }
                     function onCurrentPageChanged() { dualrmPoller.emitPage(); }
                 }
                 Connections {
@@ -113,6 +118,9 @@ AFFECT /qml/device/view/main/MainView.qml
                         if (previous === BatteryManager.Normal && next !== BatteryManager.Normal) {
                             dualrmPoller.ev("SLEEP");
                         } else if (previous !== BatteryManager.Normal && next === BatteryManager.Normal) {
+                            if (documentView.item) {
+                                documentView.item.dualrmPageStep = 1;   // alone until the sync says otherwise
+                            }
                             dualrmPoller.ev("WAKE");
                         }
                     }
@@ -266,6 +274,15 @@ AFFECT /qml/device/view/main/MainView.qml
                             respond(nonce, documentView.item.dualrmSetScroll(parseInt(parts[2]), parseFloat(parts[3])));
                             return;
                         }
+                        if (cmd === "pagestep") {
+                            if (!documentView.item) {
+                                respond(nonce, "error no-document-view");
+                                return;
+                            }
+                            documentView.item.dualrmPageStep = Math.max(1, parseInt(parts[2]) || 1);
+                            respond(nonce, "ok " + documentView.item.dualrmPageStep);
+                            return;
+                        }
                         if (cmd === "import") {
                             if (typeof DocumentImporter === "undefined") {
                                 respond(nonce, "error no-importer");
@@ -288,7 +305,7 @@ AFFECT /qml/device/view/main/MainView.qml
     END TRAVERSE
 END AFFECT
 
-; Batched page append, pen settings and notebook scrolling inside DocumentView (DocumentController, DeviceScreenInfo
+; Batched page append, pen settings, notebook scrolling and book-mode page turns inside DocumentView (DocumentController, DeviceScreenInfo
 ; and the DocumentToolSettings documentViewTools are in scope there).
 AFFECT /qml/device/view/documentview/DocumentView.qml
     TRAVERSE FocusScope
@@ -414,6 +431,17 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 return "ok " + Math.round(dualrmScrollMove(top));
             }
 
+            // Page turns by hand (swipe, page keys) go through moveForward / moveBackward. In book
+            // mode each tablet shows every other page, so a turn moves dualrmPageStep pages at once
+            // (one screen refresh, not a turn plus a correction by the sync). Clamped to the
+            // document; always at least one page, like the stock turn. The REBUILDs below match
+            // "currentPage" alone: it is "root.currentPage" on 3.29, "documentView.currentPage" on 3.23.
+            property int dualrmPageStep: 1
+            function dualrmPageDelta(dir) {
+                const t = Math.max(0, Math.min(currentPage + dir * dualrmPageStep, document.pageCount - 1));
+                return Math.max(1, Math.abs(t - currentPage));
+            }
+
             function dualrmEnsurePages(count, target) {
                 const doc = documentView.document;
                 if (!doc) {
@@ -442,5 +470,13 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 return have + n;
             }
         }
+        REBUILD moveForward
+            LOCATE BEFORE ALL
+            REPLACE { currentPage + 1 } WITH { currentPage + dualrmPageDelta(1) }
+        END REBUILD
+        REBUILD moveBackward
+            LOCATE BEFORE ALL
+            REPLACE { currentPage - 1 } WITH { currentPage - dualrmPageDelta(-1) }
+        END REBUILD
     END TRAVERSE
 END AFFECT
