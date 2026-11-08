@@ -81,7 +81,7 @@ D=/home/root/dualrm; T=/tmp/dualrm-install
 mkdir -p "$D"
 cp "$T"/dualrm-*.sh "$D"/
 chmod +x "$D"/*.sh
-cp "$T"/xovi/dualrm.qmd /home/root/xovi/exthome/qt-resource-rebuilder/
+cp "$T"/xovi/dualrm.qmd "$T"/xovi/dualrm-tray.qmd /home/root/xovi/exthome/qt-resource-rebuilder/
 cp "$T"/systemd/dualrm-ev.socket "$T"/systemd/dualrm-ev@.service \
    "$T"/systemd/dualrm-cmd.socket "$T"/systemd/dualrm-cmd@.service "$T"/systemd/dualrm-xovi.service \
    "$T"/systemd/dualrm-usbrole.service /etc/systemd/system/

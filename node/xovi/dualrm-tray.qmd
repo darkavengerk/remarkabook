@@ -1,0 +1,49 @@
+; dual-rM link indicator in the library's status tray (left of the sync / WiFi / battery icons): a link
+; icon and "USB" / "WiFi" while linked. The state lives in MainView's dualrmLink item (dualrm.qmd, set
+; by the "link" command), found by walking up the parents (MainView is an ancestor of the navigator).
+; A file of its own so that a firmware with a different header cannot stop dualrm.qmd from loading.
+; "?#indicatorRow" finds the tray row at any depth by its id: the header's root type differs by
+; firmware (3.29: FocusScope, 3.23: DeviceKeyboardNavigationHandler), the row does not.
+AFFECT /qml/device/view/navigator/ContentHeader.qml
+    TRAVERSE ?#indicatorRow
+        LOCATE BEFORE ALL
+        INSERT {
+            Row {
+                id: dualrmLinkTray
+                property var src: null
+                visible: src !== null && src.via !== ""
+                spacing: 4
+                Layout.alignment: Qt.AlignVCenter
+                function dualrmFind() {
+                    for (let p = dualrmLinkTray.parent; p; p = p.parent) {
+                        const kids = p.children;
+                        for (let i = 0; i < kids.length; i++) {
+                            if (kids[i].objectName === "dualrmLink") {
+                                dualrmLinkTray.src = kids[i];
+                                return;
+                            }
+                        }
+                    }
+                }
+                Component.onCompleted: dualrmFind()
+                Timer {
+                    interval: 1000
+                    repeat: true
+                    running: dualrmLinkTray.src === null
+                    onTriggered: dualrmLinkTray.dualrmFind()
+                }
+                ArkControls.Icon {
+                    size: ArkControls.Values.iconSize.small
+                    source: "qrc:/ark/icons/link"
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Text {
+                    text: dualrmLinkTray.src && dualrmLinkTray.src.via === "usb" ? "USB" : "WiFi"
+                    font.pixelSize: 24
+                    color: "black"
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+        }
+    END TRAVERSE
+END AFFECT

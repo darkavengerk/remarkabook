@@ -45,7 +45,7 @@ systemctl daemon-reload
 for r in /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role; do
     [ -f "$r" ] && echo gadget > "$r" 2>/dev/null
 done
-rm -f /home/root/xovi/exthome/qt-resource-rebuilder/dualrm.qmd
+rm -f /home/root/xovi/exthome/qt-resource-rebuilder/dualrm.qmd /home/root/xovi/exthome/qt-resource-rebuilder/dualrm-tray.qmd
 if [ -d "$D/backup" ] && [ -n "$(ls -A "$D/backup")" ]; then
     mkdir -p /home/root/dualrm-backup && cp -a "$D/backup/." /home/root/dualrm-backup/
     echo "  annotation backups kept in /home/root/dualrm-backup"
