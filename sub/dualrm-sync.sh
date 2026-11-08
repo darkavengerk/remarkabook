@@ -3,7 +3,8 @@
 # alike: whatever is opened, closed or paged on one is mirrored on the other.
 #
 # Both tablets run the xochitl patch and the event/command sockets (node/). The main is reached
-# over one ssh session (USB first, then home WiFi) running node/dualrm-link.sh. Nothing polls:
+# over one ssh session (USB first, then WiFi: MAIN_LAN or found, see dualrm-discover.sh) running
+# node/dualrm-link.sh. Both tablets show a link indicator while it is up. Nothing polls:
 # this script sleeps on the $D/events fifo, fed by
 #   "EV ..."  events of this tablet (dualrm-ev.sh)
 #   "RM ..."  events of the main (forwarded by the link reader below)
@@ -33,6 +34,7 @@ MAIN_LAN=""
 BOOK_LEFT=main          # tablet showing the left page in book mode (main | sub)
 BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 [ -f "$D/dualrm.conf" ] && . "$D/dualrm.conf"
+. /home/root/dualrm/dualrm-discover.sh
 
 mkfifos
 trap 'rm -f "$D/events.reader"' EXIT
@@ -49,24 +51,27 @@ tick() { read -r up _ < /proc/uptime; TICK=${up%.*}${up#*.}; }   # uptime in 1/1
 # ---------------------------------------------------------------- link to the main
 ROLE=$(ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role 2>/dev/null | head -n 1)
 
-pick_main() {
+pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main is not reachable.
+              # Sets variables instead of printing: discover_main keeps state between calls.
+    MAIN=""; VIA=""
     # USB link = a cdc_ether interface (USB-C in host mode, or the pogo pins)
     for n in /sys/class/net/*; do
         case "$(readlink "$n/device/driver" 2>/dev/null)" in
             *cdc_ether*)
                 k=0
                 while [ $k -lt 10 ]; do   # DHCP from the main can take a few seconds
-                    if ping -c1 -W1 "$MAIN_USB" >/dev/null 2>&1; then echo "$MAIN_USB"; return; fi
+                    if ping -c1 -W1 "$MAIN_USB" >/dev/null 2>&1; then MAIN=$MAIN_USB; VIA=usb; return; fi
                     k=$((k + 1))
                 done ;;
         esac
     done
-    if [ -n "$MAIN_LAN" ] && ping -c1 -W1 "$MAIN_LAN" >/dev/null 2>&1; then echo "$MAIN_LAN"; fi
+    if [ -n "$MAIN_LAN" ] && ping -c1 -W1 "$MAIN_LAN" >/dev/null 2>&1; then MAIN=$MAIN_LAN; VIA=wifi; return; fi
+    if discover_main; then MAIN=$DISC_FOUND; VIA=wifi; log "found the main at $MAIN"; fi
 }
 
 link_loop() {
     while :; do
-        MAIN=$(pick_main)
+        pick_main
         if [ -z "$MAIN" ]; then sleep 5; continue; fi
         log "connecting to main at $MAIN"
         echo "$MAIN" > "$D/mainhost"
@@ -76,13 +81,19 @@ link_loop() {
             case "$l" in
                 "EV RESP "*) printf '%s\n' "${l#EV RESP }" > "$D/rresponse" ;;
                 EV\ *) printf 'RM %s\n' "${l#EV }" > "$D/events" ;;
-                HELLO) echo "RM LINKUP" > "$D/events" ;;
+                HELLO) echo "RM LINKUP $VIA" > "$D/events" ;;
             esac
         done
         echo "RM LINKDOWN" > "$D/events"
         log "link to $MAIN lost"
         sleep 3
     done
+}
+
+save_main_id() { # remember which tablet the main is, for discovery (install.sh writes it too)
+    [ -s "$D/main.id" ] && return
+    _id=$(mssh cat /etc/machine-id)
+    [ ${#_id} = 32 ] && echo "$_id" > "$D/main.id"
 }
 
 mssh() { ssh -y -K 10 -i "$KEY" "root@$(cat "$D/mainhost")" "$@" 2>>"$D/ssh.err"; }   # extra session for files
@@ -520,8 +531,10 @@ close_pending() { # the document on CLOSING_FROM stayed closed: close the other 
 
 # ---------------------------------------------------------------- main loop
 link_loop &
-log "sync v10 (event driven, both ways, copies PDFs and annotations, pens, notebook scroll, sleep)"
+( while sleep 30; do echo PING >&4; done ) &   # keeps the main's link end from timing out
+log "sync v11 (event driven, both ways, copies PDFs and annotations, pens, notebook scroll, sleep, link indicator, WiFi discovery)"
 CLOSING_FROM=""
+local_request link - >/dev/null   # no link yet (an indicator may be left from a killed sync)
 local_request emit >/dev/null
 while :; do
     if [ -n "$CLOSING_FROM" ]; then
@@ -548,12 +561,17 @@ while :; do
             on_scroll "$side" "$2" "$3" "$4" ;;
         SLEEP) on_sleep "$side" ;;
         WAKE) on_wake "$side" ;;
-        LINKUP)
-            LINK=1; AWAKE_main=1; log "link up"
+        LINKUP\ *)
+            via=${body#LINKUP }
+            LINK=1; AWAKE_main=1; log "link up ($via)"
+            local_request link "$via" >/dev/null
+            remote_request link "$via" >/dev/null
+            save_main_id
             remote_request emit >/dev/null ;;
         LINKDOWN)
-            # alone again: page turns step one page (the main's link end does the same there)
-            [ "$MODE" = book ] && local_request pagestep 1 >/dev/null
+            # alone again: indicator off, page turns step one page (the main's link end does the
+            # same there)
+            local_request link - >/dev/null
             LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM="" ;;
     esac
 done
