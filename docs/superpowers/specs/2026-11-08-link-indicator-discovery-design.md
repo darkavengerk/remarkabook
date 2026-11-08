@@ -89,8 +89,10 @@ updated to match.
 
 ## Testing
 
-- PC mock (shell, fake `ssh`/`ping6`/`local_request`): discovery picks the host whose
-  machine-id matches, skips failed and own addresses, backs off; LINKUP/LINKDOWN send the
-  right `link` commands; `dualrm-link.sh` exits after the read timeout and posts `link -`.
+- Shell tests (stubbed `ssh`/`ping6`/`ip`; on the PC and on the sub's busybox from `/tmp`):
+  discovery picks the host whose machine-id matches, skips failed and own addresses, backs
+  off; `dualrm-link.sh` exits after the read timeout and posts `link -`.
+- The sync's LINKUP/LINKDOWN wiring: `sh -n` plus the on-device check (the sync needs live
+  fifos and xochitl; a mock would test the mock).
 - On the tablets (user): indicator appears/disappears on USB plug/unplug and on WiFi, and
   where it sits; discovery on a phone hotspot.
