@@ -3,8 +3,8 @@
 #
 #   ./install.sh [-y] <sub-ssh-target> <main-ssh-target> [main-wifi-ip]
 #
-#   sub           the tablet that runs the sync (and is the USB host when cabled)
-#   main          the other tablet
+#   sub           the tablet that runs the sync and logs in to the other one
+#   main          the other tablet (on a USB cable, either one can sit on either side)
 #   targets       anything ssh accepts, e.g. root@10.11.99.1 or a ~/.ssh/config alias
 #   main-wifi-ip  written to the sub's dualrm.conf as MAIN_LAN on first install (optional:
 #                 the sub also finds the main on a shared WiFi by itself; this is only faster)
@@ -70,10 +70,11 @@ if [ $YES = 0 ]; then
 fi
 
 # ---------------------------------------------------------------- both tablets
-install_node() { # target extra-files-from-sub/...
+install_node() { # target [tar arguments for more files: -C ../sub file...]
     t=$1; shift
-    tar cf - -C node dualrm-lib.sh dualrm-ev.sh dualrm-cmd.sh dualrm-link.sh systemd xovi \
-        -C ../sub "$@" | ssh "$t" 'rm -rf /tmp/dualrm-install && mkdir /tmp/dualrm-install && tar xf - -C /tmp/dualrm-install'
+    tar cf - -C node dualrm-lib.sh dualrm-ev.sh dualrm-cmd.sh dualrm-link.sh dualrm-usbrole.sh \
+        systemd xovi etc "$@" \
+        | ssh "$t" 'rm -rf /tmp/dualrm-install && mkdir /tmp/dualrm-install && tar xf - -C /tmp/dualrm-install'
     ssh "$t" sh -s <<'EOF'
 set -e
 D=/home/root/dualrm; T=/tmp/dualrm-install
@@ -83,26 +84,45 @@ chmod +x "$D"/*.sh
 cp "$T"/xovi/dualrm.qmd /home/root/xovi/exthome/qt-resource-rebuilder/
 cp "$T"/systemd/dualrm-ev.socket "$T"/systemd/dualrm-ev@.service \
    "$T"/systemd/dualrm-cmd.socket "$T"/systemd/dualrm-cmd@.service "$T"/systemd/dualrm-xovi.service \
-   /etc/systemd/system/
+   "$T"/systemd/dualrm-usbrole.service /etc/systemd/system/
+# the other tablet on the cable is always named dualrm0 (devices plugged in from now on)
+mkdir -p /etc/systemd/network
+cp "$T"/etc/10-dualrm-peer.link /etc/systemd/network/
+udevadm control --reload >/dev/null 2>&1 || :
 systemctl daemon-reload
 systemctl enable --now dualrm-ev.socket dualrm-cmd.socket >/dev/null 2>&1
-systemctl enable dualrm-xovi >/dev/null 2>&1
+systemctl enable dualrm-xovi dualrm-usbrole >/dev/null 2>&1
 EOF
 }
 
-# main: event/command sockets, link end, patch
+# main: event/command sockets, link end, patch, USB role switching, SSH on the cable
 echo "installing on the main ($MAIN)"
-install_node "$MAIN" systemd/dualrm-xovi.service
-ssh "$MAIN" 'rm -rf /tmp/dualrm-install; systemctl restart dualrm-xovi'
+install_node "$MAIN" -C ../sub systemd/dualrm-xovi.service \
+    -C ../main systemd/dualrm-ssh.socket systemd/dualrm-ssh@.service etc/NetworkManager-dualrm.conf
+ssh "$MAIN" sh -s <<'EOF'
+set -e
+T=/tmp/dualrm-install
+cp "$T"/systemd/dualrm-ssh.socket "$T"/systemd/dualrm-ssh@.service /etc/systemd/system/
+# NetworkManager leaves dualrm0 alone (read now, applied when the device appears)
+mkdir -p /etc/NetworkManager/conf.d
+cp "$T"/etc/NetworkManager-dualrm.conf /etc/NetworkManager/conf.d/dualrm.conf
+nmcli general reload conf >/dev/null 2>&1 || :
+rm -rf "$T"
+systemctl daemon-reload
+# started each time dualrm0 appears (WantedBy its device unit); now only if it is there already
+systemctl enable dualrm-ssh.socket >/dev/null 2>&1
+[ ! -e /sys/class/net/dualrm0 ] || systemctl start dualrm-ssh.socket
+systemctl restart dualrm-xovi dualrm-usbrole
+EOF
 
-# sub: the same, plus sync, USB role switching and the pogo helpers
+# sub: the same, plus sync and the pogo helpers
 echo "installing on the sub ($SUB)"
 logn=$(ssh "$SUB" 'wc -l < /home/root/dualrm/sync.log 2>/dev/null || echo 0')
-install_node "$SUB" dualrm-sync.sh dualrm-discover.sh dualrm-usbrole.sh dualrm-pogo.sh dualrm.conf.example systemd etc
+install_node "$SUB" -C ../sub dualrm-sync.sh dualrm-discover.sh dualrm-pogo.sh dualrm.conf.example systemd etc
 ssh "$SUB" "MAIN_LAN='$MAIN_LAN' sh -s" <<'EOF'
 set -e
 D=/home/root/dualrm; T=/tmp/dualrm-install
-cp "$T"/systemd/dualrm-sync.service "$T"/systemd/dualrm-usbrole.service "$T"/systemd/dualrm-pogo.service /etc/systemd/system/
+cp "$T"/systemd/dualrm-sync.service "$T"/systemd/dualrm-pogo.service /etc/systemd/system/
 mkdir -p /etc/systemd/system/usb-ether-once.service.d
 cp "$T"/systemd/usb-ether-once-dualrm.conf /etc/systemd/system/usb-ether-once.service.d/dualrm.conf
 cp "$T"/etc/dualrm-fix-udc.sh /etc/
@@ -116,7 +136,7 @@ rm -rf "$T"
 dropbearkey -y -f "$D/id_dualrm" | grep '^ssh-' > "$D/id_dualrm.pub"
 
 systemctl daemon-reload
-systemctl enable dualrm-sync dualrm-usbrole >/dev/null 2>&1
+systemctl enable dualrm-sync >/dev/null 2>&1
 # pogo helper only matters with the edited device tree (pogo controller in host mode)
 ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b10000.usb/ci_hdrc.* >/dev/null 2>&1 \
     && systemctl enable dualrm-pogo >/dev/null 2>&1

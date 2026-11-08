@@ -1,0 +1,11 @@
+# /etc/systemd/network/10-dualrm-peer.link (both tablets)
+# dual-rM: the other tablet, seen as a USB network device while this tablet is the USB host
+# (see dualrm-usbrole.sh), gets one fixed name: dualrm0. On the main, NetworkManager leaves it
+# alone by that name (conf.d/dualrm.conf) and dualrm-ssh.socket listens on it; the sub's
+# 05-dualrm-host.network matches it by driver. Sorts before 99-default.link, which would name
+# it after its USB path (e.g. enu1c2). Applies to devices that appear after it is installed.
+[Match]
+Driver=cdc_ether
+
+[Link]
+Name=dualrm0

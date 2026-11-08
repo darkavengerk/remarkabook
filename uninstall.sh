@@ -7,7 +7,7 @@
 #   -y  do not ask before restarting xochitl
 #
 # Removes the services, scripts and the xochitl patch, takes the sub's key off the main and
-# puts the sub's USB-C port back into device mode. xovi itself and its other extensions stay.
+# puts both tablets' USB-C ports back into device mode. xovi itself and its other extensions stay.
 # Annotation backups (dualrm/backup) are kept in /home/root/dualrm-backup.
 # xochitl is restarted with xovi (if installed), so other extensions keep working.
 set -e
@@ -28,12 +28,18 @@ remove_node() { # target
     ssh "$1" sh -s <<'EOF'
 D=/home/root/dualrm
 systemctl disable --now dualrm-sync dualrm-usbrole dualrm-pogo dualrm-ev.socket dualrm-cmd.socket \
-    dualrm-xovi >/dev/null 2>&1
+    dualrm-xovi dualrm-ssh.socket >/dev/null 2>&1
 cd /etc/systemd/system && rm -f dualrm-sync.service dualrm-usbrole.service dualrm-pogo.service \
     dualrm-ev.socket dualrm-ev@.service dualrm-cmd.socket dualrm-cmd@.service dualrm-xovi.service \
-    usb-ether-once.service.d/dualrm.conf
+    dualrm-ssh.socket dualrm-ssh@.service usb-ether-once.service.d/dualrm.conf
 rmdir usb-ether-once.service.d 2>/dev/null
-rm -f /etc/dualrm-fix-udc.sh /etc/systemd/network/05-dualrm-host.network
+rm -f /etc/dualrm-fix-udc.sh /etc/systemd/network/05-dualrm-host.network \
+    /etc/systemd/network/10-dualrm-peer.link
+udevadm control --reload >/dev/null 2>&1
+if [ -f /etc/NetworkManager/conf.d/dualrm.conf ]; then
+    rm -f /etc/NetworkManager/conf.d/dualrm.conf
+    nmcli general reload conf >/dev/null 2>&1
+fi
 systemctl daemon-reload
 # USB-C back to device mode (PC file transfer / SSH over USB)
 for r in /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role; do

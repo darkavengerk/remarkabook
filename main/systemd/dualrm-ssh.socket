@@ -1,0 +1,21 @@
+# /etc/systemd/system/dualrm-ssh.socket (main tablet)
+# dual-rM: SSH on the USB cable while the main is the USB host and the sub the USB device. The
+# stock sockets listen on usb0/usb1 (the main as device) and wlan0 only, nothing on dualrm0
+# (see 10-dualrm-peer.link). Built like dropbear-wlan.socket: BindToDevice= gives the socket
+# BindsTo= and After= on the device unit (it stops when dualrm0 goes), and the [Install] below
+# starts it each time dualrm0 appears. Not in sockets.target: the boot would wait for a device
+# that is usually not there.
+[Unit]
+Description=dual-rM: SSH on the USB link to the sub (dualrm0)
+Conflicts=dropbear.service
+ConditionPathExists=!/home/root/.config/remarkable/rm_disable_ssh
+Requires=home.mount
+After=home.mount
+
+[Socket]
+ListenStream=22
+BindToDevice=dualrm0
+Accept=yes
+
+[Install]
+WantedBy=sys-subsystem-net-devices-dualrm0.device

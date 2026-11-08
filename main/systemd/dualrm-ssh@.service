@@ -1,0 +1,14 @@
+# /etc/systemd/system/dualrm-ssh@.service (main tablet): one SSH connection accepted by
+# dualrm-ssh.socket. The same as the stock dropbear@.service (same host key, same options).
+[Unit]
+Description=dual-rM: SSH connection on the USB link
+Wants=dropbearkey.service
+After=syslog.target dropbearkey.service dropbearkey-run-fallback.service
+
+[Service]
+Environment="DROPBEAR_ED25519KEY_DIR=/etc/dropbear"
+EnvironmentFile=-/etc/default/dropbear
+ExecStart=-/usr/sbin/dropbear -G root -i -r ${DROPBEAR_ED25519KEY_DIR}/dropbear_ed25519_host_key $DROPBEAR_EXTRA_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+StandardInput=socket
+KillMode=process

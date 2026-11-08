@@ -1,9 +1,10 @@
 [Unit]
-Description=dual-rM USB role switcher (become USB host when the main tablet is plugged in)
+Description=dual-rM USB role switcher (USB device when powered, USB host when not)
 After=xochitl.service
 
 [Service]
 ExecStart=/bin/sh /home/root/dualrm/dualrm-usbrole.sh
+# back to device mode (PC file transfer, SSH over USB) once the switcher is gone
 ExecStopPost=/bin/sh -c 'for r in /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role; do echo gadget > $$r; done'
 Restart=always
 RestartSec=5
