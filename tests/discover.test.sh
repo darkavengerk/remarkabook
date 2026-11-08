@@ -17,18 +17,19 @@ command -v usleep >/dev/null 2>&1 || usleep() { sleep 0.2; }
 log() { echo "$*" >> "$T/log"; }; : > "$T/log"
 MAINID=0123456789abcdef0123456789abcdef
 OWN=fe80::1
-ip() { [ -n "$OWN" ] && echo "    inet6 $OWN/64 scope link "; }
+ip() { echo "$4" >> "$T/ip.if"; [ -n "$OWN" ] && echo "    inet6 $OWN/64 scope link "; }
 RESP="fe80::1 fe80::aa fe80::bb"
 PINGS=0
 ping6() {
     PINGS=$((PINGS + 1)); echo "$PINGS" > "$T/pings"
+    for a; do case "$a" in ff02::1%*) echo "${a#ff02::1%}" >> "$T/ping.if" ;; esac; done
     for a in $RESP; do echo "64 bytes from $a: seq=0 ttl=64 time=1.000 ms (DUP!)"; done
 }
 # fe80::aa refuses the key, fe80::bb is the main, fe80::dd is another tablet,
 # fe80::cc never answers, fe80::ee asks for a password
 ssh() {
-    for a; do case "$a" in root@*) h=${a#root@}; h=${h%\%*} ;; esac; done
-    echo "$h" >> "$T/ssh.log"
+    for a; do case "$a" in root@*) h=${a#root@}; i=${h#*%}; h=${h%\%*} ;; esac; done
+    echo "$h" >> "$T/ssh.log"; echo "$h%$i" >> "$T/ssh.if"
     case "$h" in
         fe80::bb) echo "$MAINID" ;;
         fe80::dd) echo ffffffffffffffffffffffffffffffff ;;
@@ -40,7 +41,11 @@ ssh() {
 T_NOW=100; disc_now() { DISC_T=$T_NOW; }
 tries() { cat "$T/ssh.log" 2>/dev/null | wc -l | tr -d ' '; }
 cs() { read -r u _ < /proc/uptime; echo "${u%.*}${u#*.}"; }   # uptime in 1/100 s
-reset() { DISC_BAD=""; DISC_BAD_T=0; DISC_NEXT=0; DISC_WAIT=0; : > "$T/ssh.log"; echo 0 > "$T/pings"; PINGS=0; }
+bo() { eval "echo \${DISC_WAIT_${1:-wlan0}:-0} \${DISC_NEXT_${1:-wlan0}:-0}"; }  # back-off of an interface
+reset() {
+    DISC_BAD=""; DISC_BAD_T=0; unset DISC_WAIT_wlan0 DISC_NEXT_wlan0 DISC_WAIT_usb1 DISC_NEXT_usb1
+    : > "$T/ssh.log"; : > "$T/ssh.if"; : > "$T/ping.if"; : > "$T/ip.if"; echo 0 > "$T/pings"; PINGS=0
+}
 
 # 1. no main.id: discovery off, logged once
 reset
@@ -55,28 +60,29 @@ reset
 discover_main; r=$?
 check "found" "$r $DISC_FOUND" "0 fe80::bb%wlan0"
 check "own address never tried" "$(grep -c '^fe80::1$' "$T/ssh.log")" 0
-check "refusing host marked bad" "$DISC_BAD" " fe80::aa"
-check "back-off reset on hit" "$DISC_WAIT $DISC_NEXT" "0 0"
+check "refusing host marked bad" "$DISC_BAD" " fe80::aa%wlan0"
+check "back-off reset on hit" "$(bo)" "0 0"
+check "default interface wlan0" "$(sort -u "$T/ping.if") $(sort -u "$T/ip.if")" "wlan0 wlan0"
 
 # 3. another tablet: marked bad and logged
 reset; : > "$T/log"; RESP="fe80::dd"
 discover_main; r=$?
 check "wrong id not accepted" "$r '$DISC_FOUND'" "1 ''"
-check "wrong id marked bad" "$DISC_BAD" " fe80::dd"
-check "wrong id logged" "$(cat "$T/log")" "discovery: fe80::dd answered another id"
-check "first back-off 5 s" "$DISC_WAIT $DISC_NEXT" "5 105"
+check "wrong id marked bad" "$DISC_BAD" " fe80::dd%wlan0"
+check "wrong id logged" "$(cat "$T/log")" "discovery: fe80::dd%wlan0 answered another id"
+check "first back-off 5 s" "$(bo)" "5 105"
 
 # 4. password prompt: marked bad at once, not logged
 reset; : > "$T/log"; RESP="fe80::ee"
 t0=$(cs); discover_main; t1=$(cs)
-check "password host marked bad" "$DISC_BAD" " fe80::ee"
+check "password host marked bad" "$DISC_BAD" " fe80::ee%wlan0"
 check "password host given up within 1.5 s" "$([ $((t1 - t0)) -lt 150 ] && echo yes || echo "no ($((t1 - t0))/100 s)")" yes
 check "password host not logged" "$(cat "$T/log")" ""
 
 # 5. silent host: marked bad after DISC_TIMEOUT
 reset; RESP="fe80::cc"; DISC_TIMEOUT=1
 t0=$(cs); discover_main; t1=$(cs)
-check "silent host marked bad" "$DISC_BAD" " fe80::cc"
+check "silent host marked bad" "$DISC_BAD" " fe80::cc%wlan0"
 check "silent host given up after ~1 s" \
     "$([ $((t1 - t0)) -ge 80 ] && [ $((t1 - t0)) -lt 250 ] && echo yes || echo "no ($((t1 - t0))/100 s)")" yes
 DISC_TIMEOUT=8
@@ -84,31 +90,49 @@ DISC_TIMEOUT=8
 # 6. the bad list is forgotten DISC_FORGET s after its first entry
 reset; RESP="fe80::aa"; T_NOW=1000; DISC_FORGET=180
 discover_main
-check "bad list started" "$DISC_BAD $DISC_BAD_T" " fe80::aa 1000"
-T_NOW=1179; DISC_NEXT=0; : > "$T/ssh.log"; discover_main
+check "bad list started" "$DISC_BAD $DISC_BAD_T" " fe80::aa%wlan0 1000"
+T_NOW=1179; DISC_NEXT_wlan0=0; : > "$T/ssh.log"; discover_main
 check "bad host skipped before DISC_FORGET" "$(tries)" 0
-T_NOW=1180; DISC_NEXT=0; : > "$T/ssh.log"; discover_main
+T_NOW=1180; DISC_NEXT_wlan0=0; : > "$T/ssh.log"; discover_main
 check "bad host tried again after DISC_FORGET" "$(tries)" 1
-check "bad list restarted" "$DISC_BAD $DISC_BAD_T" " fe80::aa 1180"
+check "bad list restarted" "$DISC_BAD $DISC_BAD_T" " fe80::aa%wlan0 1180"
 
 # 7. back-off: nothing tried before DISC_NEXT, then 5, 10, 20, 30, 30
 reset; RESP="fe80::1 fe80::aa"; T_NOW=100
-discover_main; check "first back-off 5 s" "$DISC_WAIT $DISC_NEXT" "5 105"
+discover_main; check "first back-off 5 s" "$(bo)" "5 105"
 : > "$T/ssh.log"; echo 0 > "$T/pings"
 T_NOW=104; discover_main
 check "skipped before DISC_NEXT" "$(cat "$T/pings")" 0
 T_NOW=105; discover_main
-check "second back-off 10 s" "$DISC_WAIT $DISC_NEXT" "10 115"
+check "second back-off 10 s" "$(bo)" "10 115"
 check "bad hosts not tried again" "$(tries)" 0
-T_NOW=115; discover_main; check "third back-off 20 s" "$DISC_WAIT" 20
-T_NOW=135; discover_main; check "back-off capped 30 s" "$DISC_WAIT" 30
-T_NOW=165; discover_main; check "back-off stays 30 s" "$DISC_WAIT" 30
+T_NOW=115; discover_main; check "third back-off 20 s" "$(bo)" "20 135"
+T_NOW=135; discover_main; check "back-off capped 30 s" "$(bo)" "30 165"
+T_NOW=165; discover_main; check "back-off stays 30 s" "$(bo)" "30 195"
 
 # 8. no link-local address on wlan0 (WiFi off): no ping
 reset; OWN=""
 discover_main; r=$?
 check "wifi off: returns 1" "$r" 1
 check "wifi off: no ping" "$(cat "$T/pings")" 0
+
+# 9. per interface: a miss on wlan0 does not hold back usb1, a host bad on wlan0 is tried on usb1
+reset; OWN=fe80::1; RESP="fe80::aa"; T_NOW=100
+discover_main wlan0; r1=$?
+check "wlan0 miss: back-off on wlan0" "$r1 $(bo wlan0)" "1 5 105"
+check "wlan0 miss: no back-off on usb1" "$(bo usb1)" "0 0"
+: > "$T/ping.if"; : > "$T/ip.if"; : > "$T/ssh.if"; RESP="fe80::aa fe80::bb"
+discover_main usb1; r=$?
+check "usb1 tried during wlan0 back-off" "$r $DISC_FOUND" "0 fe80::bb%usb1"
+check "usb1: ping and own address on usb1" "$(sort -u "$T/ping.if") $(sort -u "$T/ip.if")" "usb1 usb1"
+check "usb1: bad on wlan0 still tried on usb1" "$(head -n 1 "$T/ssh.if")" "fe80::aa%usb1"
+check "usb1: bad list per interface" "$DISC_BAD" " fe80::aa%wlan0 fe80::aa%usb1"
+check "usb1 hit: wlan0 back-off kept" "$(bo wlan0) $(bo usb1)" "5 105 0 0"
+T_NOW=104; : > "$T/ping.if"; discover_main wlan0
+check "wlan0 still waits" "$(cat "$T/ping.if")" ""
+reset; RESP="fe80::aa"
+discover_main usb1
+check "usb1 miss: back-off on usb1 only" "$(bo usb1) $(bo wlan0)" "5 109 0 0"
 
 rm -rf "$T"
 [ $FAIL = 0 ] && echo PASS || { echo FAILED; exit 1; }
