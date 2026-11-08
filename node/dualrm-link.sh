@@ -2,11 +2,13 @@
 # dual-rM link end on the MAIN tablet, started by the sub over ssh:
 #   ssh main sh /home/root/dualrm/dualrm-link.sh
 # stdout: this tablet's events ("EV DOC/PAGE/RESP ..."), "HELLO" once, "HB" every 30 s
-# stdin:  "CMD <nonce> <command...>" from the sub
+# stdin:  "CMD <nonce> <command...>" from the sub, "PING" every 30 s (other lines are ignored);
+#         nothing for LINK_IDLE s ends the session (the sub vanished without closing it)
 #         find <parent|-> <type> <name...>, has <uuid>, fsize <file>, snap_docs, new_doc and power_key
 #         are answered here from the files; everything else goes to xochitl.
 . /home/root/dualrm/dualrm-lib.sh
 mkfifos
+LINK_IDLE=${LINK_IDLE:-75}
 
 # one link at a time: a link left over from a vanished sub would split the event stream
 old=$(cat "$D/events.reader" 2>/dev/null)
@@ -21,13 +23,13 @@ cleanup() {
     kill $hb $fwd 2>/dev/null
     [ "$(cat "$D/events.reader" 2>/dev/null)" = "$$ $hb $fwd" ] || return
     rm -f "$D/events.reader"
-    local_post "L$$ pagestep 1"     # the sub is gone: page turns step one page again
+    local_post "L$$ link -"         # the sub is gone: indicator off, page turns step one page
 }
 trap cleanup EXIT
 trap 'exit 0' TERM HUP
 
 echo HELLO
-while IFS= read -r l; do
+while IFS= read -r -t "$LINK_IDLE" l; do
     case "$l" in
         CMD\ *)
             l=${l#CMD }; nonce=${l%% *}; c=${l#* }
