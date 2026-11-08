@@ -120,8 +120,6 @@ systemctl enable dualrm-sync dualrm-usbrole >/dev/null 2>&1
 # pogo helper only matters with the edited device tree (pogo controller in host mode)
 ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b10000.usb/ci_hdrc.* >/dev/null 2>&1 \
     && systemctl enable dualrm-pogo >/dev/null 2>&1
-systemctl restart dualrm-xovi     # reload xochitl with the patch
-systemctl restart dualrm-usbrole dualrm-sync
 EOF
 
 # ---------------------------------------------------------------- the sub may log in to the main
@@ -130,7 +128,15 @@ ssh "$MAIN" "mkdir -p /home/root/.ssh && chmod 700 /home/root/.ssh &&
     { grep -qxF '$key' /home/root/.ssh/authorized_keys 2>/dev/null ||
       echo '$key' >> /home/root/.ssh/authorized_keys; } && chmod 600 /home/root/.ssh/authorized_keys"
 echo "the sub's key is authorized on the main"
-[ -n "$idm" ] && ssh "$SUB" "echo '$idm' > /home/root/dualrm/main.id"   # for WiFi discovery
+
+# ---------------------------------------------------------------- the main's id, for WiFi discovery
+# a random id kept on the main (not /etc/machine-id: that is on the rootfs, which updates replace)
+nid=$(ssh "$MAIN" 'f=/home/root/dualrm/node.id; [ -s $f ] || cat /proc/sys/kernel/random/uuid | tr -d - > $f; cat $f')
+[ ${#nid} = 32 ] || { echo "could not read or create /home/root/dualrm/node.id on the main" >&2; exit 1; }
+ssh "$SUB" "echo '$nid' > /home/root/dualrm/main.id"
+
+# ---------------------------------------------------------------- start the sub
+ssh "$SUB" 'systemctl restart dualrm-xovi && systemctl restart dualrm-usbrole dualrm-sync'
 
 echo "waiting for the link..."
 i=0

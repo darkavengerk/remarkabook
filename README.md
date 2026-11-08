@@ -150,9 +150,10 @@ BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 ### WiFi
 
 Both tablets on the same network. The sub finds the main by itself (an IPv6 ping to all hosts
-on the network, then its SSH key, which only the main accepts), so the main needs no fixed
-address. With `MAIN_LAN` set, that address is tried first. The sync prefers a USB link when
-there is one and falls back to WiFi.
+on the network, then its SSH key and the main's id), so the main needs no fixed address. The
+sub learns the main's id from `install.sh` or from one USB link: until then, discovery is off
+(`discovery off: no main.id` in the sub's log). With `MAIN_LAN` set, that address is tried
+first. The sync prefers a USB link when there is one and falls back to WiFi.
 
 Most public WiFi (cafés, shops, libraries) does not let devices on it talk to each other: the
 tablets cannot link there. Use a phone hotspot instead, or the USB cable.
@@ -208,8 +209,8 @@ systemctl disable --now dualrm-sync dualrm-usbrole   # (sub) turn the sync off
 - **Nothing follows**: no `● USB` / `● WiFi` at the top right means no link; the sub's
   `sync.log` shows `link up (usb|wifi)` and `link ... lost`. No link over WiFi: are both on
   the same network, and not a public one that isolates devices? `found the main at` in the
-  log means discovery worked. A new main tablet: delete `/home/root/dualrm/main.id` on the sub
-  (or re-run `install.sh`).
+  log means discovery worked. A new main tablet: re-run `install.sh` (or link once over USB:
+  the sub then learns the new main's id).
 - **The UI misbehaves after an update**: run `/home/root/xovi/stock` on that tablet, then
   rebuild the hash table and re-run `install.sh`. If it still fails, that firmware is not
   supported yet: please open an issue with the `journalctl` output above.
