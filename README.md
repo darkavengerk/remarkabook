@@ -58,7 +58,8 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 | Sleep together | works |
 | Link over WiFi, main found without a fixed address | new, not yet tested on the tablets |
 | Link indicator (top right) | new, not yet tested on the tablets |
-| Link over one USB cable (no WiFi) | works, see [USB cable](#usb-cable) |
+| Link over one USB cable (no WiFi), sub as USB host | works, see [USB cable](#usb-cable) |
+| Link over one USB cable, main as USB host (either tablet on either side) | new, not yet tested on the tablets |
 | Link over the sub's pogo pins | experimental, see [pogo/](pogo/README.md) |
 
 ## Requirements
@@ -80,9 +81,9 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 The two tablets do the same work except that the **sub** runs the sync (the part that
 decides) and logs in to the **main** over SSH. Pick as sub:
 
-- the tablet you would rather not update (see [Firmware updates](#firmware-updates)), and
-- if you want a USB cable between them, the tablet that sits on the unpowered side of the
-  adapter (see [USB cable](#usb-cable)).
+- the tablet you would rather not update (see [Firmware updates](#firmware-updates)).
+
+On a USB cable either tablet can sit on either side of the adapter (see [USB cable](#usb-cable)).
 
 Book mode puts the main on the left by default (`BOOK_LEFT` in [Configuration](#configuration)).
 
@@ -151,9 +152,9 @@ BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 
 Both tablets on the same network. The sub finds the main by itself (an IPv6 ping to all hosts
 on the network, then its SSH key and the main's id), so the main needs no fixed address. The
-sub learns the main's id from `install.sh` or from one USB link: until then, discovery is off
-(`discovery off: no main.id` in the sub's log). With `MAIN_LAN` set, that address is tried
-first. The sync prefers a USB link when there is one and falls back to WiFi.
+sub learns the main's id from `install.sh` or from one link with the sub as USB host: until
+then, discovery is off (`discovery off: no main.id` in the sub's log). With `MAIN_LAN` set,
+that address is tried first. The sync prefers a USB link when there is one and falls back to WiFi.
 
 Most public WiFi (cafés, shops, libraries) does not let devices on it talk to each other: the
 tablets cannot link there. Use a phone hotspot instead, or the USB cable.
@@ -164,22 +165,28 @@ The reMarkable 2 USB-C port never outputs 5 V and cannot do USB-PD role swaps, s
 C-to-C cable does not work. What does:
 
 ```
- main ── USB-C plug │ passthrough adapter │ USB-A ── A-to-C cable ── sub
-                    │  (USB-C plug,       │
- power bank ── PD in│   USB-A, PD in)     │
+ tablet ── USB-C plug │ passthrough adapter │ USB-A ── A-to-C cable ── tablet
+                      │  (USB-C plug,       │
+ power bank ──── PD in│   USB-A, PD in)     │
 ```
 
 - The adapter is a plain "USB-C to USB-A + PD charging" passthrough (no hub chip). Its PD
-  input powers only the USB-C plug side, so the **main** goes on that side and gets
-  charged; the main only shows up as a USB device when it sees 5 V.
-- The **sub** sits on the USB-A side without power. `dualrm-usbrole.sh` puts the sub's port
-  into host mode whenever no power comes in; the main shows up as a USB network device
-  (`10.11.99.1`) and the sync switches to it.
-- The other way round (sub on the PD side) does not work: the main gets no 5 V. The sides
-  are fixed by which tablet you installed as sub.
-- The sub is not charged in this setup. Unplugging the cable falls back to WiFi.
-- With the sub on a PC or a charger, its port stays a normal USB device (file transfer,
-  SSH over USB).
+  input powers one side only (usually the USB-C plug side; some adapter and power bank
+  combinations power the other side).
+- On both tablets `dualrm-usbrole.sh` applies one rule: **the tablet that gets power on its
+  USB-C is the USB device** (and is charged), **the tablet without power is the USB host**.
+  So either tablet, main or sub, can sit on either side of the adapter.
+  - Sub as host: the main shows up on the sub as a USB network device (`10.11.99.1`).
+  - Main as host: the sub shows up on the main as a USB network device (`dualrm0`), and the
+    sub finds the main on the cable the way it does on WiFi (IPv6 link-local, its SSH key and
+    the main's id). This needs the main's id on the sub, which `install.sh` writes.
+  - Either way the sync switches to the cable and the indicator shows `● USB`.
+- Both tablets powered, or neither: there is no USB link (both are devices, or both hosts).
+  The tablets stay on, or fall back to, WiFi.
+- The tablet without power is not charged. Unplugging the cable falls back to WiFi.
+- The role follows the power within a few seconds (a reading counts after about 1 s).
+- A tablet on a PC or a charger is powered, so its port is a normal USB device (file
+  transfer, SSH over USB). With nothing plugged in, the port waits in host mode.
 
 ### Pogo pins (experimental)
 
@@ -200,17 +207,23 @@ modules are not an option: production kernels enforce module signatures.
 
 ```sh
 tail -n 30 /home/root/dualrm/sync.log                # (sub) what the sync did; "link up" = linked
+                                                     # (main) only the USB role switcher's lines
 cat /home/root/dualrm/ssh.err                        # (sub) why the link to the main failed
 journalctl -u xochitl -n 100 | grep -i 'qmldiff\|dualrm'   # (either) did the patch load?
-systemctl disable --now dualrm-sync dualrm-usbrole   # (sub) turn the sync off
+systemctl disable --now dualrm-sync                  # (sub) turn the sync off
+systemctl disable --now dualrm-usbrole               # (either) USB-C back to device mode only
 /home/root/xovi/stock                                # (either) xochitl without patches until next boot
 ```
 
 - **Nothing follows**: no `● USB` / `● WiFi` at the top right means no link; the sub's
   `sync.log` shows `link up (usb|wifi)` and `link ... lost`. No link over WiFi: are both on
   the same network, and not a public one that isolates devices? `found the main at` in the
-  log means discovery worked. A new main tablet: re-run `install.sh` (or link once over USB:
-  the sub then learns the new main's id).
+  log means discovery worked. A new main tablet: re-run `install.sh` (or link once over USB
+  with the sub as host: the sub then learns the new main's id).
+- **No USB link**: exactly one tablet must get power from the adapter (`usbrole: role ->` in
+  `sync.log` on each tablet shows its role: `gadget` = powered, `host` = not). Main as host:
+  the sub needs the main's id (see [WiFi](#wifi)) and the main's log shows `other tablet
+  attached (dualrm0, ...)`.
 - **The UI misbehaves after an update**: run `/home/root/xovi/stock` on that tablet, then
   rebuild the hash table and re-run `install.sh`. If it still fails, that firmware is not
   supported yet: please open an issue with the `journalctl` output above.
@@ -258,6 +271,10 @@ Nothing polls. Both tablets run the same pieces (`node/`):
 - **`dualrm-link.sh`** is the main's end of the SSH session: it forwards the main's events
   and hands the sub's commands to the main's xochitl.
 - **`dualrm-xovi.service`**: starts xovi at boot.
+- **`dualrm-usbrole.sh`**: puts the USB-C port into device mode when power comes in (a PC,
+  a charger, or the adapter with the other tablet as host) and into host mode when none does. `10-dualrm-peer.link`
+  names the other tablet's USB network interface `dualrm0`; on the main, NetworkManager leaves
+  it alone (`main/etc/`) and `dualrm-ssh.socket` (`main/systemd/`) runs SSH on it.
 
 The sub additionally runs:
 
@@ -265,8 +282,6 @@ The sub additionally runs:
   events from both tablets, pairs documents and moves the other tablet. It recognises its
   own echoes (the other tablet reporting what it was just told to do). Copied PDFs are
   remembered in `dualrm/pairs`.
-- **`sub/dualrm-usbrole.sh`**: switches the sub's USB-C port between device mode (PC) and
-  host mode (main tablet).
 - Sleep together works by pressing the other tablet's power key through its input device:
   xochitl refuses to go to sleep any other way.
 
