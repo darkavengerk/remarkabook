@@ -21,6 +21,8 @@
 ;     setscroll <page> <top>  (notebook pages only: scroll so scene y <top> is at the top of the view)
 ;     pagestep <n>            (a page turn by hand moves n pages: 2 in book mode; back to 1 when
 ;                              another document opens or the tablet wakes up)
+;     link <usb|wifi|->       (linked to the other tablet over USB / WiFi: show the indicator at
+;                              the top right; "-": hide it, page turns step one page again)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
@@ -283,6 +285,15 @@ AFFECT /qml/device/view/main/MainView.qml
                             respond(nonce, "ok " + documentView.item.dualrmPageStep);
                             return;
                         }
+                        if (cmd === "link") {
+                            const via = parts[2] || "-";
+                            dualrmLink.via = via === "-" ? "" : via;
+                            if (via === "-" && documentView.item) {
+                                documentView.item.dualrmPageStep = 1;   // alone again
+                            }
+                            respond(nonce, "ok " + via);
+                            return;
+                        }
                         if (cmd === "import") {
                             if (typeof DocumentImporter === "undefined") {
                                 respond(nonce, "error no-importer");
@@ -300,6 +311,44 @@ AFFECT /qml/device/view/main/MainView.qml
                     }
                 }
 
+            }
+
+            // link indicator: "● USB" / "● WiFi" while linked to the other tablet (command "link").
+            // No input handlers: touches and pen go through to whatever is underneath.
+            Rectangle {
+                id: dualrmLink
+                objectName: "dualrmLink"
+                property string via: ""
+                visible: via !== ""
+                z: 10000
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 12
+                anchors.rightMargin: 12
+                width: dualrmLinkRow.implicitWidth + 28
+                height: 44
+                radius: 22
+                color: "white"
+                border.color: "black"
+                border.width: 2
+                Row {
+                    id: dualrmLinkRow
+                    anchors.centerIn: parent
+                    spacing: 8
+                    Rectangle {
+                        width: 14
+                        height: 14
+                        radius: 7
+                        color: "black"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: dualrmLink.via === "usb" ? "USB" : "WiFi"
+                        color: "black"
+                        font.pixelSize: 24
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
             }
         }
     END TRAVERSE
