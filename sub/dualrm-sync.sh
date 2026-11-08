@@ -4,8 +4,9 @@
 #
 # Both tablets run the xochitl patch and the event/command sockets (node/). The main is reached
 # over one ssh session (USB first, then WiFi: MAIN_LAN or found, see dualrm-discover.sh) running
-# node/dualrm-link.sh. Both tablets show a link indicator while it is up. Nothing polls:
-# this script sleeps on the $D/events fifo, fed by
+# node/dualrm-link.sh. On USB the sub is the host (the main at 10.11.99.1) or the device (the
+# main found on the cable by discovery), see node/dualrm-usbrole.sh. Both tablets show a link
+# indicator while it is up. Nothing polls: this script sleeps on the $D/events fifo, fed by
 #   "EV ..."  events of this tablet (dualrm-ev.sh)
 #   "RM ..."  events of the main (forwarded by the link reader below)
 #
@@ -49,14 +50,16 @@ now() { read -r up _ < /proc/uptime; NOW=${up%.*}; }
 tick() { read -r up _ < /proc/uptime; TICK=${up%.*}${up#*.}; }   # uptime in 1/100 s
 
 # ---------------------------------------------------------------- link to the main
-ROLE=$(ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role 2>/dev/null | head -n 1)
+UDC=$(ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.* 2>/dev/null | head -n 1)
+UDC=/sys/class/udc/${UDC##*/}/state     # "configured": a USB host talks to our USB-C
 
 pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main is not reachable.
               # Sets variables instead of printing: discover_main keeps state between calls.
               # Only called from the link_loop subshell: discover_main must run there (its state
               # lives in that shell, and the main shell's EXIT trap must not run in its children).
     MAIN=""; VIA=""
-    # USB link = a cdc_ether interface (USB-C in host mode, or the pogo pins)
+    # USB link, this tablet the USB host: the main is a cdc_ether interface (USB-C in host
+    # mode, or the pogo pins) and serves 10.11.99.1
     for n in /sys/class/net/*; do
         case "$(readlink "$n/device/driver" 2>/dev/null)" in
             *cdc_ether*)
@@ -67,11 +70,23 @@ pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main
                 done ;;
         esac
     done
+    # USB link, this tablet the USB device (the sub gets power from the adapter, the main does
+    # not): the main is the host and has no fixed address on the cable, so it is found like on
+    # WiFi, on each of our gadget interfaces that is up (a PC is probed too: not the main)
+    _st=""; { read -r _st < "$UDC"; } 2>/dev/null
+    if [ "$_st" = configured ]; then
+        for n in /sys/class/net/usb*; do
+            [ -e "$n/device/driver" ] && continue    # a USB network device, not our gadget
+            _op=""; { read -r _op < "$n/operstate"; } 2>/dev/null
+            [ "$_op" = up ] || continue
+            if discover_main "${n##*/}"; then MAIN=$DISC_FOUND; VIA=usb; log "found the main at $MAIN"; return; fi
+        done
+    fi
     now
     if [ -n "$MAIN_LAN" ] && [ "$NOW" -ge "$LAN_SKIP" ] && ping -c1 -W1 "$MAIN_LAN" >/dev/null 2>&1; then
         MAIN=$MAIN_LAN; VIA=wifi; return
     fi
-    if discover_main; then MAIN=$DISC_FOUND; VIA=wifi; log "found the main at $MAIN"; fi
+    if discover_main wlan0; then MAIN=$DISC_FOUND; VIA=wifi; log "found the main at $MAIN"; fi
 }
 
 link_loop() {
