@@ -6,8 +6,8 @@
 #   sub           the tablet that runs the sync (and is the USB host when cabled)
 #   main          the other tablet
 #   targets       anything ssh accepts, e.g. root@10.11.99.1 or a ~/.ssh/config alias
-#   main-wifi-ip  written to the sub's dualrm.conf as MAIN_LAN on first install (optional;
-#                 without it the tablets only find each other over a USB cable)
+#   main-wifi-ip  written to the sub's dualrm.conf as MAIN_LAN on first install (optional:
+#                 the sub also finds the main on a shared WiFi by itself; this is only faster)
 #   -y            do not ask before restarting xochitl
 #
 # Requires xovi + qt-resource-rebuilder (with a hashtab for the installed firmware) on BOTH.
@@ -98,7 +98,7 @@ ssh "$MAIN" 'rm -rf /tmp/dualrm-install; systemctl restart dualrm-xovi'
 # sub: the same, plus sync, USB role switching and the pogo helpers
 echo "installing on the sub ($SUB)"
 logn=$(ssh "$SUB" 'wc -l < /home/root/dualrm/sync.log 2>/dev/null || echo 0')
-install_node "$SUB" dualrm-sync.sh dualrm-usbrole.sh dualrm-pogo.sh dualrm.conf.example systemd etc
+install_node "$SUB" dualrm-sync.sh dualrm-discover.sh dualrm-usbrole.sh dualrm-pogo.sh dualrm.conf.example systemd etc
 ssh "$SUB" "MAIN_LAN='$MAIN_LAN' sh -s" <<'EOF'
 set -e
 D=/home/root/dualrm; T=/tmp/dualrm-install
@@ -130,6 +130,7 @@ ssh "$MAIN" "mkdir -p /home/root/.ssh && chmod 700 /home/root/.ssh &&
     { grep -qxF '$key' /home/root/.ssh/authorized_keys 2>/dev/null ||
       echo '$key' >> /home/root/.ssh/authorized_keys; } && chmod 600 /home/root/.ssh/authorized_keys"
 echo "the sub's key is authorized on the main"
+[ -n "$idm" ] && ssh "$SUB" "echo '$idm' > /home/root/dualrm/main.id"   # for WiFi discovery
 
 echo "waiting for the link..."
 i=0
@@ -142,4 +143,4 @@ while [ $i -lt 20 ]; do
 done
 echo "installed, but no link yet. Check the sub's log:"
 echo "  ssh $SUB tail -n 20 /home/root/dualrm/sync.log"
-[ -n "$MAIN_LAN" ] || echo "(no main-wifi-ip given: the tablets only link over a USB cable, see README)"
+echo "(both on the same WiFi: the sub finds the main by itself; public WiFi often blocks this, see README)"

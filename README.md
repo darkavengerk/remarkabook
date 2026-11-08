@@ -31,6 +31,8 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
 - **Sleep**: putting one tablet to sleep puts the other to sleep too. Waking up is per
   tablet: in deep sleep only the power button (or a charger) wakes a reMarkable.
 - **Close** follows too.
+- **Link indicator**: while the tablets are linked, both show `● USB` or `● WiFi` at the top
+  right. No indicator: not linked (nothing follows).
 
 ### Tested
 
@@ -54,7 +56,8 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 | Annotations of book-mode documents, both ways | works (on open / close; not live) |
 | Pen settings, both ways | works |
 | Sleep together | works |
-| Link over home WiFi | works |
+| Link over WiFi, main found without a fixed address | new, not yet tested on the tablets |
+| Link indicator (top right) | new, not yet tested on the tablets |
 | Link over one USB cable (no WiFi) | works, see [USB cable](#usb-cable) |
 | Link over the sub's pogo pins | experimental, see [pogo/](pogo/README.md) |
 
@@ -88,15 +91,14 @@ Book mode puts the main on the left by default (`BOOK_LEFT` in [Configuration](#
 1. Install xovi and qt-resource-rebuilder on both tablets and build the hash table
    (see [Requirements](#requirements)). Check that xovi starts: run `/home/root/xovi/start`
    on each tablet; the UI restarts.
-2. On the **main**, check that SSH over WiFi works from the PC (if you want the WiFi link).
-   Give the main a fixed address in your router (DHCP reservation).
+2. On the **main**, check that SSH over WiFi works from the PC (the installer uses it).
 3. From this repository on the PC:
 
    ```sh
    ./install.sh root@<sub-address> root@<main-address> <main-wifi-address>
    ```
 
-   The last argument is optional: without it the tablets only link over a USB cable.
+   The last argument is optional: the sub also finds the main on a shared WiFi by itself.
 
 The installer checks both tablets (model, firmware, xovi, hash table), asks before going
 on, copies the files, enables the services, restarts xochitl once on each tablet, authorizes
@@ -125,7 +127,7 @@ xochitl. xovi and its other extensions stay. Annotation backups are kept in
 `/home/root/dualrm/dualrm.conf` on the sub (`systemctl restart dualrm-sync` after a change):
 
 ```sh
-MAIN_LAN=192.168.1.50   # the main's WiFi address; empty: USB cable only
+MAIN_LAN=192.168.1.50   # optional: the main's WiFi address, tried first; empty: found by itself
 BOOK_LEFT=main          # tablet showing the left page in book mode: main | sub
 BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 ```
@@ -147,8 +149,13 @@ BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 
 ### WiFi
 
-Both tablets on the same network, `MAIN_LAN` set to the main's address. The sync prefers a
-USB link when there is one and falls back to WiFi.
+Both tablets on the same network. The sub finds the main by itself (an IPv6 ping to all hosts
+on the network, then its SSH key, which only the main accepts), so the main needs no fixed
+address. With `MAIN_LAN` set, that address is tried first. The sync prefers a USB link when
+there is one and falls back to WiFi.
+
+Most public WiFi (cafés, shops, libraries) does not let devices on it talk to each other: the
+tablets cannot link there. Use a phone hotspot instead, or the USB cable.
 
 ### USB cable
 
@@ -169,8 +176,7 @@ C-to-C cable does not work. What does:
   (`10.11.99.1`) and the sync switches to it.
 - The other way round (sub on the PD side) does not work: the main gets no 5 V. The sides
   are fixed by which tablet you installed as sub.
-- The sub is not charged in this setup. Unplugging the cable falls back to WiFi (if
-  `MAIN_LAN` is set).
+- The sub is not charged in this setup. Unplugging the cable falls back to WiFi.
 - With the sub on a PC or a charger, its port stays a normal USB device (file transfer,
   SSH over USB).
 
@@ -199,8 +205,11 @@ systemctl disable --now dualrm-sync dualrm-usbrole   # (sub) turn the sync off
 /home/root/xovi/stock                                # (either) xochitl without patches until next boot
 ```
 
-- **Nothing follows**: check the sub's `sync.log` for `link up`. No link over WiFi: is
-  `MAIN_LAN` right, does the main answer `ping`, does SSH over WiFi work on the main?
+- **Nothing follows**: no `● USB` / `● WiFi` at the top right means no link; the sub's
+  `sync.log` shows `link up (usb|wifi)` and `link ... lost`. No link over WiFi: are both on
+  the same network, and not a public one that isolates devices? `found the main at` in the
+  log means discovery worked. A new main tablet: delete `/home/root/dualrm/main.id` on the sub
+  (or re-run `install.sh`).
 - **The UI misbehaves after an update**: run `/home/root/xovi/stock` on that tablet, then
   rebuild the hash table and re-run `install.sh`. If it still fails, that firmware is not
   supported yet: please open an issue with the `journalctl` output above.
