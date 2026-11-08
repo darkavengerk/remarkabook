@@ -118,8 +118,10 @@ AFFECT /qml/device/view/main/MainView.qml
                     ignoreUnknownSignals: true
                     function onDisplayStateChanged(previous, next) {
                         if (previous === BatteryManager.Normal && next !== BatteryManager.Normal) {
+                            dualrmLink.asleep = true;   // the sleep screen shows no indicator
                             dualrmPoller.ev("SLEEP");
                         } else if (previous !== BatteryManager.Normal && next === BatteryManager.Normal) {
+                            dualrmLink.asleep = false;
                             if (documentView.item) {
                                 documentView.item.dualrmPageStep = 1;   // alone until the sync says otherwise
                             }
@@ -319,7 +321,8 @@ AFFECT /qml/device/view/main/MainView.qml
                 id: dualrmLink
                 objectName: "dualrmLink"
                 property string via: ""
-                visible: via !== ""
+                property bool asleep: false
+                visible: via !== "" && !asleep
                 z: 10000
                 anchors.top: parent.top
                 anchors.right: parent.right
