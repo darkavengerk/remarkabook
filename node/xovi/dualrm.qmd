@@ -21,8 +21,8 @@
 ;     setscroll <page> <top>  (notebook pages only: scroll so scene y <top> is at the top of the view)
 ;     pagestep <n>            (a page turn by hand moves n pages: 2 in book mode; back to 1 when
 ;                              another document opens or the tablet wakes up)
-;     link <usb|wifi|->       (linked to the other tablet over USB / WiFi: show the indicator at
-;                              the top right; "-": hide it, page turns step one page again)
+;     link <usb|wifi|->       (linked to the other tablet over USB / WiFi: show it in the status
+;                              tray of the library; "-": hide it, page turns step one page again)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
 AFFECT /qml/device/view/main/MainView.qml
     TRAVERSE Background
@@ -118,10 +118,8 @@ AFFECT /qml/device/view/main/MainView.qml
                     ignoreUnknownSignals: true
                     function onDisplayStateChanged(previous, next) {
                         if (previous === BatteryManager.Normal && next !== BatteryManager.Normal) {
-                            dualrmLink.asleep = true;   // the sleep screen shows no indicator
                             dualrmPoller.ev("SLEEP");
                         } else if (previous !== BatteryManager.Normal && next === BatteryManager.Normal) {
-                            dualrmLink.asleep = false;
                             if (documentView.item) {
                                 documentView.item.dualrmPageStep = 1;   // alone until the sync says otherwise
                             }
@@ -315,43 +313,12 @@ AFFECT /qml/device/view/main/MainView.qml
 
             }
 
-            // link indicator: "● USB" / "● WiFi" while linked to the other tablet (command "link").
-            // No input handlers: touches and pen go through to whatever is underneath.
-            Rectangle {
+            // link state ("usb" / "wifi" / "" when not linked), set by the "link" command; the
+            // status tray in ContentHeader (patched below) finds this item by its objectName
+            Item {
                 id: dualrmLink
                 objectName: "dualrmLink"
                 property string via: ""
-                property bool asleep: false
-                visible: via !== "" && !asleep
-                z: 10000
-                anchors.top: parent.top
-                anchors.right: parent.right
-                anchors.topMargin: 12
-                anchors.rightMargin: 12
-                width: dualrmLinkRow.implicitWidth + 28
-                height: 44
-                radius: 22
-                color: "white"
-                border.color: "black"
-                border.width: 2
-                Row {
-                    id: dualrmLinkRow
-                    anchors.centerIn: parent
-                    spacing: 8
-                    Rectangle {
-                        width: 14
-                        height: 14
-                        radius: 7
-                        color: "black"
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Text {
-                        text: dualrmLink.via === "usb" ? "USB" : "WiFi"
-                        color: "black"
-                        font.pixelSize: 24
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
             }
         }
     END TRAVERSE
@@ -531,4 +498,96 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
             REPLACE { currentPage - 1 } WITH { currentPage - dualrmPageDelta(-1) }
         END REBUILD
     END TRAVERSE
+END AFFECT
+
+; Link indicator in the library's status tray (left of the sync / WiFi / battery icons): a link icon
+; and "USB" / "WiFi" while linked. The state lives in MainView's dualrmLink item, found by walking up
+; the parents (MainView is an ancestor of the navigator). The header's root type differs by firmware
+; (3.29: FocusScope, 3.23: DeviceKeyboardNavigationHandler), the tray row is the same.
+AFFECT /qml/device/view/navigator/ContentHeader.qml
+    IF EXISTS FocusScope
+        TRAVERSE FocusScope > Loader#topStatusIndication > MouseArea:sourceComponent > RowLayout#indicatorRow
+            LOCATE BEFORE ALL
+            INSERT {
+                Row {
+                    id: dualrmLinkTray
+                    property var src: null
+                    visible: src !== null && src.via !== ""
+                    spacing: 4
+                    Layout.alignment: Qt.AlignVCenter
+                    function dualrmFind() {
+                        for (let p = dualrmLinkTray.parent; p; p = p.parent) {
+                            const kids = p.children;
+                            for (let i = 0; i < kids.length; i++) {
+                                if (kids[i].objectName === "dualrmLink") {
+                                    dualrmLinkTray.src = kids[i];
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Component.onCompleted: dualrmFind()
+                    Timer {
+                        interval: 1000
+                        repeat: true
+                        running: dualrmLinkTray.src === null
+                        onTriggered: dualrmLinkTray.dualrmFind()
+                    }
+                    ArkControls.Icon {
+                        size: ArkControls.Values.iconSize.small
+                        source: "qrc:/ark/icons/link"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: dualrmLinkTray.src && dualrmLinkTray.src.via === "usb" ? "USB" : "WiFi"
+                        font.pixelSize: 24
+                        color: "black"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
+        END TRAVERSE
+    ELSE
+        TRAVERSE DeviceKeyboardNavigationHandler > Loader#topStatusIndication > MouseArea:sourceComponent > RowLayout#indicatorRow
+            LOCATE BEFORE ALL
+            INSERT {
+                Row {
+                    id: dualrmLinkTray
+                    property var src: null
+                    visible: src !== null && src.via !== ""
+                    spacing: 4
+                    Layout.alignment: Qt.AlignVCenter
+                    function dualrmFind() {
+                        for (let p = dualrmLinkTray.parent; p; p = p.parent) {
+                            const kids = p.children;
+                            for (let i = 0; i < kids.length; i++) {
+                                if (kids[i].objectName === "dualrmLink") {
+                                    dualrmLinkTray.src = kids[i];
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Component.onCompleted: dualrmFind()
+                    Timer {
+                        interval: 1000
+                        repeat: true
+                        running: dualrmLinkTray.src === null
+                        onTriggered: dualrmLinkTray.dualrmFind()
+                    }
+                    ArkControls.Icon {
+                        size: ArkControls.Values.iconSize.small
+                        source: "qrc:/ark/icons/link"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: dualrmLinkTray.src && dualrmLinkTray.src.via === "usb" ? "USB" : "WiFi"
+                        font.pixelSize: 24
+                        color: "black"
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
+        END TRAVERSE
+    END IF
 END AFFECT
