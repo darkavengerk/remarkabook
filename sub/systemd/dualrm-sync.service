@@ -4,6 +4,9 @@ After=network-online.target xochitl.service
 
 [Service]
 ExecStart=/bin/sh /home/root/dualrm/dualrm-sync.sh
+# indicator off once the sync is gone ($$ is a literal $ here; wait: the bell is rung in the
+# background and would be killed with the unit's processes)
+ExecStopPost=/bin/sh -c '. /home/root/dualrm/dualrm-lib.sh; local_post "S$$$$ link -"; wait $$rp'
 Restart=always
 RestartSec=5
 StandardOutput=append:/home/root/dualrm/sync.log

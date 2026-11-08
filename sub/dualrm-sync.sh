@@ -53,6 +53,8 @@ ROLE=$(ls -d /sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb/ci_hdrc.*/role
 
 pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main is not reachable.
               # Sets variables instead of printing: discover_main keeps state between calls.
+              # Only called from the link_loop subshell: discover_main must run there (its state
+              # lives in that shell, and the main shell's EXIT trap must not run in its children).
     MAIN=""; VIA=""
     # USB link = a cdc_ether interface (USB-C in host mode, or the pogo pins)
     for n in /sys/class/net/*; do
@@ -65,35 +67,48 @@ pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main
                 done ;;
         esac
     done
-    if [ -n "$MAIN_LAN" ] && ping -c1 -W1 "$MAIN_LAN" >/dev/null 2>&1; then MAIN=$MAIN_LAN; VIA=wifi; return; fi
+    now
+    if [ -n "$MAIN_LAN" ] && [ "$NOW" -ge "$LAN_SKIP" ] && ping -c1 -W1 "$MAIN_LAN" >/dev/null 2>&1; then
+        MAIN=$MAIN_LAN; VIA=wifi; return
+    fi
     if discover_main; then MAIN=$DISC_FOUND; VIA=wifi; log "found the main at $MAIN"; fi
 }
 
 link_loop() {
+    LAN_SKIP=0   # uptime until which MAIN_LAN is not tried (it answered ping but gave no link)
     while :; do
         pick_main
         if [ -z "$MAIN" ]; then sleep 5; continue; fi
         log "connecting to main at $MAIN"
         echo "$MAIN" > "$D/mainhost"
+        rm -f "$D/hello"
         # -I: drop the session when the main falls silent (it sends HB every 30 s)
         ssh -y -K 10 -I 75 -i "$KEY" "root@$MAIN" 'sh /home/root/dualrm/dualrm-link.sh' \
             < "$D/linkin" 2>>"$D/ssh.err" | while IFS= read -r l; do
             case "$l" in
                 "EV RESP "*) printf '%s\n' "${l#EV RESP }" > "$D/rresponse" ;;
                 EV\ *) printf 'RM %s\n' "${l#EV }" > "$D/events" ;;
-                HELLO) echo "RM LINKUP $VIA" > "$D/events" ;;
+                HELLO) : > "$D/hello"; echo "RM LINKUP $VIA" > "$D/events" ;;
             esac
         done
         echo "RM LINKDOWN" > "$D/events"
         log "link to $MAIN lost"
+        if [ "$MAIN" = "$MAIN_LAN" ] && [ ! -f "$D/hello" ]; then
+            # MAIN_LAN is another host on this network: let discovery have a turn
+            now; LAN_SKIP=$((NOW + 300)); log "no link at $MAIN_LAN: not tried for 5 min"
+        fi
         sleep 3
     done
 }
 
-save_main_id() { # remember which tablet the main is, for discovery (install.sh writes it too)
-    [ -s "$D/main.id" ] && return
-    _id=$(mssh cat /etc/machine-id)
-    [ ${#_id} = 32 ] && echo "$_id" > "$D/main.id"
+save_main_id() { # remember which tablet the main is, for discovery (install.sh writes it too).
+                 # A link up means the main ran our dualrm-link.sh with the sub's key: trusted.
+    _id=$(mssh 'f=/home/root/dualrm/node.id; [ -s $f ] || cat /proc/sys/kernel/random/uuid | tr -d - > $f; cat $f')
+    [ ${#_id} = 32 ] || return
+    _old=""; [ -f "$D/main.id" ] && read -r _old < "$D/main.id"
+    [ "$_id" = "$_old" ] && return
+    echo "$_id" > "$D/main.id"
+    log "saved the main's id (WiFi discovery)"
 }
 
 mssh() { ssh -y -K 10 -i "$KEY" "root@$(cat "$D/mainhost")" "$@" 2>>"$D/ssh.err"; }   # extra session for files
@@ -530,8 +545,10 @@ close_pending() { # the document on CLOSING_FROM stayed closed: close the other 
 }
 
 # ---------------------------------------------------------------- main loop
+rm -f "$D/linked"
 link_loop &
-( while sleep 30; do echo PING >&4; done ) &   # keeps the main's link end from timing out
+# keeps the main's link end from timing out; only while linked (nobody reads the fifo otherwise)
+( while sleep 30; do [ -f "$D/linked" ] && echo PING >&4; done ) &
 log "sync v11 (event driven, both ways, copies PDFs and annotations, pens, notebook scroll, sleep, link indicator, WiFi discovery)"
 CLOSING_FROM=""
 local_request link - >/dev/null   # no link yet (an indicator may be left from a killed sync)
@@ -564,14 +581,16 @@ while :; do
         LINKUP\ *)
             via=${body#LINKUP }
             LINK=1; AWAKE_main=1; log "link up ($via)"
+            : > "$D/linked"
             local_request link "$via" >/dev/null
             remote_request link "$via" >/dev/null
             save_main_id
             remote_request emit >/dev/null ;;
         LINKDOWN)
             # alone again: indicator off, page turns step one page (the main's link end does the
-            # same there)
-            local_request link - >/dev/null
+            # same there). Not after a session that never came up: nothing to undo.
+            rm -f "$D/linked"
+            [ "$LINK" = 1 ] && local_request link - >/dev/null
             LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM="" ;;
     esac
 done
