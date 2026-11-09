@@ -260,6 +260,8 @@ systemctl disable --now dualrm-usbrole               # (either) USB-C back to de
 
 - reMarkable 2 only; tested on the firmware versions above.
 - Strokes and annotations are copied when a document is opened or closed, not live.
+- A page erased completely on one tablet gets its strokes back from the other tablet (a page
+  without strokes never replaces one with strokes). Erase on both, or delete the page.
 - Waking from sleep is per tablet.
 - One pair of tablets per installation.
 
