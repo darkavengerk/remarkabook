@@ -7,8 +7,8 @@ mkdir -p "$T/d" "$T/x/doc1" "$T/x/doc1.thumbnails"
 . "$T/lib.sh"
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; FAIL=1; fi; }
-head -c 409 /dev/zero > "$T/x/doc1/aaaaaaaa-1111.rm"      # saved without strokes
-head -c 4000 /dev/zero > "$T/x/doc1/bbbbbbbb-2222.rm"     # strokes
+dd if=/dev/zero bs=409 count=1 2>/dev/null > "$T/x/doc1/aaaaaaaa-1111.rm"      # saved without strokes
+dd if=/dev/zero bs=4000 count=1 2>/dev/null > "$T/x/doc1/bbbbbbbb-2222.rm"     # strokes
 echo x > "$T/x/doc1.content"
 check "blank pages" "$(pages_blank doc1 aaaaaaaa,bbbbbbbb,cccccccc | tr '\n' ,)" "aaaaaaaa,cccccccc,"
 page_backup doc1 bbbbbbbb

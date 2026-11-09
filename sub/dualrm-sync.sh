@@ -208,7 +208,7 @@ mirror_path() { # side path -> uuid of the notebook at that path on side (folder
     parent=$(mirror_folders "$1" "$2") || return 1
     [ "$parent" = - ] && parent=""
     name=${2##*"$US"}
-    doc=$(find_on "$1" "$parent" DocumentType "$name")
+    doc=$(find_on "$1" "$parent" NotebookType "$name")     # not a PDF/EPUB of that name
     if [ -z "$doc" ]; then
         doc=$(req "$1" create "${parent:--}" "$name") || return 1
         log "$1: created notebook '$name'"
@@ -419,7 +419,9 @@ on_doc() { # side uuid ft path
             else target=$(mirror_path "$y" "$4") && MODE=lazy
             fi ;;
         *)
-            target=$(mirror_path "$y" "$4") && MODE=book && NB=1 && COVER=0 ;;
+            # its partner from an earlier pairing (renamed or moved since), else by name
+            target=$(nb_partner "$x" "$u") || target=$(mirror_path "$y" "$4")
+            [ -n "$target" ] && MODE=book && NB=1 && COVER=0 ;;
     esac
     if [ -z "$target" ]; then log "no counterpart on $y for '$(echo "$4" | tr "$US" /)'"; MODE=""; return; fi
     LEAD=$x
@@ -449,6 +451,7 @@ pair_ready() { # the pair is open on both: line them up (a notebook's pages firs
         nb_mapok && BMAP=$NBMAP
         [ -n "$PENDING" ] && return       # a refresh reopens both: lined up when that is done
         nb_where "$LEAD"                  # pages moved under the leader's last report
+        put CP "$(other "$LEAD")" -1      # and under the other's: goto always goes
     fi
     pages_sync "$LEAD" -1 0; pen_align; step_align; scroll_to "$(other "$LEAD")" "$(get SCR "$LEAD")"
 }
