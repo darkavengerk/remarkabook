@@ -16,6 +16,12 @@ check "backup copied" "$(ls "$T"/d/backup/*/doc1/)" "bbbbbbbb-2222.rm"
 notebook_copy doc1 "$T/m"
 check "notebook copied" "$(ls "$T/m" | tr '\n' ' ')" "doc1 doc1.content doc1.thumbnails "
 check "notebook pages copied" "$(ls "$T/m/doc1" | wc -l | tr -d ' ')" 2
+notebook_copy doc1 "$T/m2"; check "notebook copy: 0 when copied" "$?" 0
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$T/ro"; chmod 555 "$T/ro"
+    notebook_copy doc1 "$T/ro" 2>/dev/null; check "notebook copy: 1 when it fails" "$?" 1
+    chmod 755 "$T/ro"
+fi
 page_backup doc1 bbbbbbbb; check "backup: 0 when copied" "$?" 0
 chmod 000 "$T/x/doc1/bbbbbbbb-2222.rm"
 if [ "$(id -u)" != 0 ]; then

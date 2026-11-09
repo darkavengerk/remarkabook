@@ -248,7 +248,11 @@ page_backup() { # doc id8,... -> those pages' strokes into $D/backup/<time>/<doc
     return $_rc
 }
 
-notebook_copy() { # doc dir -> all of the notebook's files into dir (kept before a merge)
-    mkdir -p "$2" && cp -rp "$XD/$1" "$XD/$1".* "$2/" 2>/dev/null
-    :
+notebook_copy() { # doc dir -> all of the notebook's files into dir (kept before a merge); 1 when
+                  # a file could not be copied (then the merge does not start)
+    mkdir -p "$2" || return 1
+    for _f in "$XD/$1" "$XD/$1".*; do
+        [ -e "$_f" ] || continue
+        cp -rp "$_f" "$2/" || return 1
+    done
 }

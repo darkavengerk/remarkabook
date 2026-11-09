@@ -104,4 +104,19 @@ check "sides: moved to the front" "$(pm_sides a,b,c,d c,a,b,d)" "a,b"
 check "sides: spread moved" "$(pm_sides a,b,c,d c,d,a,b)" ""
 check "sides: nothing prints no line" "$(pm_sides a,b,c,d c,d,a,b | wc -l | tr -d ' ')" "0"
 
+# ---- first map of a pair: by id (same notebook on both), by position
+check "idmap: ids in both" "$(pm_idmap a,b,c,d a,c,e | lines)" "a a;c c"
+check "idmap: nothing in common" "$(pm_idmap a,b c,d | lines)" ""
+check "posmap: same count" "$(pm_posmap s1,s2 m1,m2 | lines)" "s1 m1;s2 m2"
+check "posmap: as far as both go" "$(pm_posmap s1,s2,s3 m1 | lines)" "s1 m1"
+
+# ---- delete guard
+pm_del_ok 0 4 0; check "del ok: nothing" "$?" 0
+pm_del_ok 6 12 0; check "del ok: 6 of 12" "$?" 0
+pm_del_ok 10 12 0; check "del ok: 10 of 12 (not more than 10)" "$?" 0
+pm_del_ok 11 30 0; check "del ok: 11 of 30 (not more than half)" "$?" 0
+pm_del_ok 11 20 0; check "del refused: 11 of 20" "$?" 1
+pm_del_ok 1 2 0; check "del refused: 1 of 2 leaves 1" "$?" 1
+pm_del_ok 1 2 1; check "del ok: 1 of 2, a blank page added" "$?" 0
+
 [ $FAIL = 0 ] && echo PASS || { echo FAILED; exit 1; }

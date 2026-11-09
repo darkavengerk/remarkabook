@@ -28,7 +28,6 @@ NB_DIRTY=0              # the last read of the page lists failed: PL_* may be st
 NBADD_main=""; NBADD_sub=""   # pages nb_run added so far (not in PL_* yet)
 NBQ=0                   # until then (uptime s), PAGE reports are our own changes settling
 NB_REFRESHED=0          # a refresh ran for this opening: do not start another
-NB_DEL_MAX=10           # more deletes than this in one go are refused (logged)
 mkdir -p "$D/pagemap"
 
 nb_quiet() { now; NBQ=$((NOW + 3)); }   # we just changed pages: their PAGE reports are ours
@@ -168,11 +167,15 @@ nb_run() { # ops (pm_plan / pm_merge output, one string) -> done on the tablets,
            # other side, whose page is in the list as last read (adds never move it away).
     nb_ops=$1
     [ -n "$nb_ops" ] || return 0
-    nb_n=$(echo "$nb_ops" | awk '$1 == "del" { n += split($3, a, ",") } END { print n + 0 }')
-    if [ "$nb_n" -gt "$NB_DEL_MAX" ]; then
-        log "notebook: refusing to delete $nb_n pages at once (map: $NBMAP)"
+    for nb_s in main sub; do
+        # a broken map must not empty a notebook (pm_del_ok)
+        set -- $(echo "$nb_ops" | awk -v s=$nb_s '$2 == s && $1 == "del" { d += split($3, a, ",") }
+            $2 == s && $1 == "add" { n++ } END { print d + 0, n + 0 }')
+        nb_t=$(nb_count "$(get PL "$nb_s")")
+        pm_del_ok "$1" "$nb_t" "$2" && continue
+        log "notebook: refusing to delete $1 of $nb_t pages on $nb_s (map: $NBMAP). If they were deleted on $(other "$nb_s") on purpose, delete them on $nb_s too (page overview)"
         return 1
-    fi
+    done
     nb_isopen main && nb_isopen sub || { log "notebook: not open on both any more"; return 1; }
     rm -f "$D/nb.rows"; NBADD_main=""; NBADD_sub=""
     while read -r nb_op nb_s nb_a nb_p; do
@@ -227,13 +230,15 @@ nb_sync() { # leader: both tablets get the same pages, in the leader's order
     nb_order "$1" && nb_pad
 }
 
-nb_differs() { # sub-id8 list -> those whose strokes differ between the tablets
+nb_differs() { # sub-id8 list -> those whose strokes differ between the tablets; 1: unknown
     [ -n "$1" ] || return 0
     ann_list "$BS" > "$D/nb.ann.sub"
+    nb_r=1
     if mssh ". $D/dualrm-lib.sh; ann_list $BM" < /dev/null > "$D/nb.ann.main"; then
-        pm_differ "$D/nb.ann.sub" "$D/nb.ann.main" "$NBMAP" "$1"
+        pm_differ "$D/nb.ann.sub" "$D/nb.ann.main" "$NBMAP" "$1"; nb_r=0
     fi
     rm -f "$D/nb.ann.sub" "$D/nb.ann.main"
+    return $nb_r
 }
 
 nb_close() { # side: close the pair's notebook there for a refresh; 1 when it was not open
@@ -279,8 +284,11 @@ nb_merge() { # a pair never shared (made in mirror mode): interleave the pages, 
     nb_b=$D/merged/$(date +%Y%m%d-%H%M%S)
     nb_ns=$(nb_count "$PL_sub"); nb_nm=$(nb_count "$PL_main")
     log "merging '$NBNAME' (main $nb_nm + sub $nb_ns pages; originals to $nb_b on each tablet)"
-    nb_on sub notebook_copy "$BS" "$nb_b"
-    nb_on main notebook_copy "$BM" "$nb_b"
+    if ! nb_on sub notebook_copy "$BS" "$nb_b" || ! nb_on main notebook_copy "$BM" "$nb_b"; then
+        rm -f "$NBMAP"
+        log "notebook: originals of '$NBNAME' not copied: not merged (tried again at the next opening)"
+        return 1
+    fi
     nb_run "$(pm_merge "$PL_sub" "$PL_main" "$BOOK_LEFT")"; nb_r=$?
     nb_lists
     if [ "$nb_r" != 0 ]; then
@@ -293,6 +301,46 @@ nb_merge() { # a pair never shared (made in mirror mode): interleave the pages, 
         return 1
     fi
     log "merged '$NBNAME': $nb_nm + $nb_ns pages -> $(nb_count "$PL_main")"
+}
+
+nb_created() { # was one of them created by the sync for this pair, and is it still as created
+               # (one page, no strokes)? Then the pair has no history to merge.
+    for nb_s in main sub; do
+        [ -f "$D/created.$(nb_doc "$nb_s")" ] || continue
+        case "$(get PL "$nb_s")" in *,*) continue ;; esac
+        [ -n "$(nb_on "$nb_s" pages_blank "$(nb_doc "$nb_s")" "$(get PL "$nb_s")")" ] && return 0
+    done
+    return 1
+}
+
+nb_samepages() { # same page count and, page by page, the same strokes (or none)? Then the
+                 # pages are mapped by position (a pair whose map was lost, or never written in)
+                 # -> 0 mapped, 1 different, 2 unknown
+    [ "$(nb_count "$PL_sub")" = "$(nb_count "$PL_main")" ] || return 1
+    pm_posmap "$PL_sub" "$PL_main" >> "$NBMAP"
+    nb_d=$(nb_differs "$PL_sub") || { echo "doc $BS $BM" > "$NBMAP"; return 2; }
+    [ -z "$nb_d" ] && return 0
+    echo "doc $BS $BM" > "$NBMAP"; return 1
+}
+
+nb_first_map() { # NBMAP holds only its doc line: how the pair's pages match
+    if [ "$BS" = "$BM" ]; then
+        # the same notebook on both tablets (a cloud copy): a page is its own partner; pages on
+        # one tablet only get a blank partner (nb_sync), strokes go the newer way (ann_sync)
+        pm_idmap "$PL_sub" "$PL_main" >> "$NBMAP"
+        log "notebook '$NBNAME': the same notebook on both tablets: pages matched by id, not merged"
+        return 0
+    fi
+    if nb_created; then
+        echo "${PL_sub%%,*} ${PL_main%%,*}" >> "$NBMAP"     # a new notebook: its first pages
+        return 0
+    fi
+    nb_samepages; nb_r=$?
+    case $nb_r in
+        0) log "notebook '$NBNAME': the same pages on both tablets: matched by position, not merged" ;;
+        2) rm -f "$NBMAP"; log "notebook '$NBNAME': strokes not compared: paired at the next opening"; return 1 ;;
+        *) nb_merge ;;
+    esac
 }
 
 nb_ready() { # the pair is open on both: same pages (merge the first time), then strokes
@@ -308,11 +356,7 @@ nb_ready() { # the pair is open on both: same pages (merge the first time), then
         fi
         [ -f "$NBMAP" ] && mv "$NBMAP" "$NBMAP.old"
         echo "doc $BS $BM" > "$NBMAP"
-        if [ -f "$D/created.$BS" ] || [ -f "$D/created.$BM" ]; then
-            echo "${PL_sub%%,*} ${PL_main%%,*}" >> "$NBMAP"     # a new notebook: its first pages
-        else
-            nb_merge || return 1
-        fi
+        nb_first_map || return 1
         rm -f "$D/created.$BS" "$D/created.$BM"
     fi
     nb_sync "$LEAD" || return 1

@@ -42,6 +42,13 @@
 #       reorder (else no output: no plan). pm_spread_add gathers scattered added pages
 #       into one block.
 #   pm_sides <old> <new>          the pages whose side (left / right) changed
+#   pm_idmap <sublist> <mainlist>  map lines for the same notebook on both tablets (a cloud
+#                                 copy): each id8 present in both lists is its own partner
+#   pm_posmap <sublist> <mainlist> map lines pairing the pages by position (as far as both go)
+#   pm_del_ok <dels> <pages> <adds> may a run delete <dels> of a side's <pages> pages (and add
+#                                 <adds>)? Not more than half of them when more than 10, and
+#                                 never down to fewer than 2 pages (a broken map must not empty
+#                                 a notebook)
 #   pm_differ <subann> <mainann> <mapfile> <sublist>
 #                                 ann_list outputs of both notebooks: the sub id8s in sublist
 #                                 whose strokes (.rm md5) differ between the tablets. A .rm
@@ -216,4 +223,22 @@ pm_sides() { # <old> <new> -> the pages (in new) whose side changed: left <-> ri
         for (j = 1; j <= nb; j++) if ((b[j] in p) && (p[b[j]] - j) % 2) o = o "," b[j]
         if (o != "") print substr(o, 2)
     }'
+}
+
+pm_idmap() {
+    awk -v S="$1" -v M="$2" 'BEGIN {
+        n = split(M, m, ","); for (i = 1; i <= n; i++) h[m[i]] = 1
+        n = split(S, a, ","); for (i = 1; i <= n; i++) if (a[i] in h) print a[i], a[i] }'
+}
+
+pm_posmap() {
+    awk -v S="$1" -v M="$2" 'BEGIN {
+        ns = split(S, a, ","); nm = split(M, b, ",")
+        for (i = 1; i <= ns && i <= nm; i++) print a[i], b[i] }'
+}
+
+pm_del_ok() {
+    [ "$1" -gt 0 ] || return 0
+    [ $(($2 - $1 + $3)) -ge 2 ] || return 1
+    [ "$1" -le 10 ] || [ $((2 * $1)) -le "$2" ]
 }
