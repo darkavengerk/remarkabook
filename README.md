@@ -33,8 +33,9 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
 - **Sleep**: putting one tablet to sleep puts the other to sleep too. Waking up is per
   tablet: in deep sleep only the power button (or a charger) wakes a reMarkable.
 - **Close** follows too.
-- **Link indicator**: while the tablets are linked, both show `● USB` or `● WiFi` at the top
-  right. No indicator: not linked (nothing follows).
+- **Link indicator**: while the tablets are linked, both show a link icon and `USB` or `WiFi`
+  among the status icons at the top of the library (left of the WiFi / battery icons). No
+  icon: not linked, nothing follows.
 
 ### Tested
 
@@ -51,7 +52,8 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 |---|---|
 | Open / close follows, both ways | works |
 | Notebook page count / current page, both ways | works (pages are added, never deleted) |
-| Page added in the middle / pages moved in the page overview, both ways | new, not yet tested on the tablets |
+| Pages moved in the page overview, both ways | works |
+| Page added in the middle, both ways | new, not yet tested on the tablets |
 | Notebook scroll position, both ways | works |
 | Book mode for PDFs on both tablets | works |
 | Book mode page turn in one step | new, not yet tested on the tablets |
@@ -59,8 +61,8 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 | Annotations of book-mode documents, both ways | works (on open / close; not live) |
 | Pen settings, both ways | works |
 | Sleep together | works |
-| Link over WiFi, main found without a fixed address | new, not yet tested on the tablets |
-| Link indicator (top right) | new, not yet tested on the tablets |
+| Link over WiFi, main found without a fixed address | works (home WiFi) |
+| Link indicator in the status icons | works |
 | Link over one USB cable (no WiFi), sub as USB host | works, see [USB cable](#usb-cable) |
 | Link over one USB cable, main as USB host (either tablet on either side) | new, not yet tested on the tablets |
 | Link over the sub's pogo pins | experimental, see [pogo/](pogo/README.md) |
@@ -92,6 +94,13 @@ Book mode puts the main on the left by default (`BOOK_LEFT` in [Configuration](#
 
 ## Install
 
+0. Get the code on the PC:
+
+   ```sh
+   git clone https://github.com/darkavengerk/remarkabook.git
+   cd remarkabook
+   ```
+
 1. Install xovi and qt-resource-rebuilder on both tablets and build the hash table
    (see [Requirements](#requirements)). Check that xovi starts: run `/home/root/xovi/start`
    on each tablet; the UI restarts.
@@ -103,13 +112,14 @@ Book mode puts the main on the left by default (`BOOK_LEFT` in [Configuration](#
    ```
 
    The last argument is optional: the sub also finds the main on a shared WiFi by itself.
+   `-y` skips the question before xochitl restarts; `-h` prints the usage.
 
 The installer checks both tablets (model, firmware, xovi, hash table), asks before going
 on, copies the files, enables the services, restarts xochitl once on each tablet, authorizes
 the sub's key on the main and waits for the link. Open a document on either tablet: the other
 follows.
 
-Re-run `install.sh` to update; it keeps the sub's key and `dualrm.conf`. xochitl may be
+To update: `git pull`, then run `install.sh` again with the same arguments; it keeps the sub's key and `dualrm.conf`. xochitl may be
 restarted only 4 times in 10 minutes; more and the tablet reboots, so do not run the
 installer several times in a row.
 
@@ -183,7 +193,7 @@ C-to-C cable does not work. What does:
   - Main as host: the sub shows up on the main as a USB network device (`dualrm0`), and the
     sub finds the main on the cable the way it does on WiFi (IPv6 link-local, its SSH key and
     the main's id). This needs the main's id on the sub, which `install.sh` writes.
-  - Either way the sync switches to the cable and the indicator shows `● USB`.
+  - Either way the sync switches to the cable and the indicator shows `USB`.
 - Both tablets powered, or neither: there is no USB link (both are devices, or both hosts).
   The tablets stay on, or fall back to, WiFi.
 - The tablet without power is not charged. Unplugging the cable falls back to WiFi.
@@ -218,7 +228,7 @@ systemctl disable --now dualrm-usbrole               # (either) USB-C back to de
 /home/root/xovi/stock                                # (either) xochitl without patches until next boot
 ```
 
-- **Nothing follows**: no `● USB` / `● WiFi` at the top right means no link; the sub's
+- **Nothing follows**: no link icon among the library's status icons means no link; the sub's
   `sync.log` shows `link up (usb|wifi)` and `link ... lost`. No link over WiFi: are both on
   the same network, and not a public one that isolates devices? `found the main at` in the
   log means discovery worked. A new main tablet: re-run `install.sh` (or link once over USB
@@ -268,7 +278,10 @@ Nothing polls. Both tablets run the same pieces (`node/`):
   changes the moment they happen (`GET http://127.0.0.1:7781/ev?...`) and takes commands
   over a held request (`GET http://127.0.0.1:7782/next`): `open`, `close`, `status`,
   `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`, `pen`, `setpen`,
-  `setscroll`, `pagestep`; events `DOC`, `PAGE`, `PEN`, `SCROLL`, `SLEEP`, `WAKE`.
+  `setscroll`, `pagestep`, `reorder`, `link`; events `DOC`, `PAGE`, `ADDED`, `ORDER`, `PEN`,
+  `SCROLL`, `SLEEP`, `WAKE`.
+- **`dualrm-tray.qmd`**, a second patch: the link icon in the library's status icons. A file of
+  its own, so a firmware whose header differs cannot stop the main patch from loading.
 - **`dualrm-ev.sh` / `dualrm-cmd.sh`** behind systemd socket units (`Accept=yes`), so a
   shell only runs while an event or command is in flight.
 - **`dualrm-link.sh`** is the main's end of the SSH session: it forwards the main's events
@@ -281,12 +294,29 @@ Nothing polls. Both tablets run the same pieces (`node/`):
 
 The sub additionally runs:
 
+- **`sub/dualrm-discover.sh`**: finds the main without a fixed address (IPv6 all-nodes ping
+  on WiFi or the USB network interface, then the sub's key and the main's `node.id`).
 - **`sub/dualrm-sync.sh`**: holds the link (USB first, then WiFi), sleeps on a fifo of
   events from both tablets, pairs documents and moves the other tablet. It recognises its
   own echoes (the other tablet reporting what it was just told to do). Copied PDFs are
   remembered in `dualrm/pairs`.
 - Sleep together works by pressing the other tablet's power key through its input device:
   xochitl refuses to go to sleep any other way.
+
+## Development
+
+The shell tests need no tablet (`ssh`, `ping6` and `ip` are stubbed):
+
+```sh
+for t in tests/*.test.sh; do sh "$t" || echo "FAILED: $t"; done
+```
+
+They also run on a tablet's busybox: copy the repository to `/tmp` there and run the same
+loop. The QML patches can only be checked on a tablet: after `install.sh`, the `journalctl`
+line in [Troubleshooting](#troubleshooting) shows whether they loaded.
+
+Bug reports: open an issue with both tablets' firmware (`cat /etc/os-release`), the sub's
+`sync.log` and the `journalctl` output.
 
 ## License
 

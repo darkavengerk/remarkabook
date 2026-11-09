@@ -13,3 +13,5 @@ pogo/dtb/*.dts
 # third-party hardware (CERN-OHL-S, linked from pogo/adapter/README.md)
 pogo/adapter/veryapt/
 pogo/adapter/order/
+# working notes (design specs and plans): kept locally, not published
+docs/superpowers/
