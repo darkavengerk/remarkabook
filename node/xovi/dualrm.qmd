@@ -110,7 +110,15 @@ AFFECT /qml/device/view/main/MainView.qml
                 // Always move the first page that is out of place forward into its place: moving a
                 // page towards the front gives the same result whichever way the insert index is
                 // counted. Each move is confirmed in the page map before the next one.
+                // An exception ends the reorder with an answer (else reordering would stay set).
                 function orderStep() {
+                    try {
+                        orderMove();
+                    } catch (e) {
+                        orderDone("error exception " + e);
+                    }
+                }
+                function orderMove() {
                     const cur = pageIds();
                     if (orderWaitId !== "") {
                         if (cur[orderWaitAt] !== orderWaitId) {
@@ -311,25 +319,35 @@ AFFECT /qml/device/view/main/MainView.qml
                     ev("RESP " + nonce + " " + text, () => dualrmPoller.poll());
                 }
                 // addpage / delpages answer from xochitl's callback; one at a time (the next
-                // command is only fetched after an answer), so one pending nonce is enough
+                // command is only fetched after an answer), so one pending nonce is enough. A
+                // callback that comes after the timeout (another command pending) is dropped.
                 property string cbNonce: ""
                 function cbStart(nonce) {
                     cbNonce = nonce;
                     dualrmCbTimer.restart();
                 }
-                function cbDone(text) {
-                    if (cbNonce === "") {
+                function cbDone(nonce, text) {
+                    if (nonce === "" || nonce !== cbNonce) {
                         return;
                     }
-                    const n = cbNonce;
                     cbNonce = "";
                     dualrmCbTimer.stop();
-                    respond(n, text);
+                    respond(nonce, text);
                 }
                 Timer {
                     id: dualrmCbTimer
                     interval: 5000
-                    onTriggered: dualrmPoller.cbDone("error timeout")
+                    onTriggered: dualrmPoller.cbDone(dualrmPoller.cbNonce, "error timeout")
+                }
+                // "i,j,...": distinct page indices (non-negative integers), else null
+                function indexList(s) {
+                    const t = String(s || "").split(",");
+                    const a = t.map(Number);
+                    if (t.some((x, i) => String(a[i]) !== x || !Number.isInteger(a[i]) || a[i] < 0)
+                            || new Set(a).size !== a.length) {
+                        return null;
+                    }
+                    return a;
                 }
 
                 function handle(line) {
@@ -380,7 +398,7 @@ AFFECT /qml/device/view/main/MainView.qml
                                 return;
                             }
                             cbStart(nonce);
-                            documentView.item.dualrmAddPage(idx, parts.slice(3).join(" "), id8 => cbDone("ok " + id8));
+                            documentView.item.dualrmAddPage(idx, parts.slice(3).join(" "), id8 => cbDone(nonce, "ok " + id8));
                             return;
                         }
                         if (cmd === "delpages") {
@@ -389,13 +407,13 @@ AFFECT /qml/device/view/main/MainView.qml
                                 respond(nonce, "error no-document");
                                 return;
                             }
-                            const list = (parts[2] || "").split(",").map(Number);
-                            if (list.length >= d.pageCount || list.some(i => !(i >= 0 && i < d.pageCount))) {
+                            const list = indexList(parts[2]);
+                            if (!list || list.length >= d.pageCount || list.some(i => i >= d.pageCount)) {
                                 respond(nonce, "error bad-pages " + parts[2]);
                                 return;
                             }
                             cbStart(nonce);
-                            documentView.item.dualrmDeletePages(list, () => cbDone("ok " + documentView.item.document.pageCount));
+                            documentView.item.dualrmDeletePages(list, () => cbDone(nonce, "ok " + (documentView.item?.document?.pageCount ?? 0)));
                             return;
                         }
                         if (cmd === "pages") {
@@ -484,11 +502,11 @@ AFFECT /qml/device/view/main/MainView.qml
                                 respond(nonce, "error busy");
                                 return;
                             }
-                            const perm = (parts[2] || "").split(",").map(Number);
+                            const perm = indexList(parts[2]);
                             const cur = pageIds();
-                            if (perm.length < 2 || perm.length > cur.length
-                                    || perm.some(i => !(i >= 0 && i < perm.length))) {
-                                respond(nonce, "error bad-order " + perm.length + "/" + cur.length);
+                            if (!perm || perm.length < 2 || perm.length > cur.length
+                                    || perm.some(i => i >= perm.length)) {
+                                respond(nonce, "error bad-order " + parts[2] + " " + cur.length);
                                 return;
                             }
                             orderTarget = perm.map(i => cur[i]).concat(cur.slice(perm.length));
@@ -521,6 +539,10 @@ AFFECT /qml/device/view/main/MainView.qml
                         }
                         respond(nonce, "error unknown-command " + cmd);
                     } catch (e) {
+                        if (cbNonce === nonce) {        // thrown after cbStart: no timeout answer too
+                            cbNonce = "";
+                            dualrmCbTimer.stop();
+                        }
                         respond(nonce, "error exception " + e);
                     }
                 }
