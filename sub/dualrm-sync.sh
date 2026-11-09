@@ -1,6 +1,6 @@
 #!/bin/sh
 # dual-rM sync. Runs ON THE SUB tablet (systemd: dualrm-sync.service) and treats both tablets
-# alike: whatever is opened, closed or paged on one is mirrored on the other.
+# alike: whatever is opened, closed or paged on one is followed on the other.
 #
 # Both tablets run the xochitl patch and the event/command sockets (node/). The main is reached
 # over one ssh session (USB first, then WiFi: MAIN_LAN or found, see dualrm-discover.sh) running
@@ -11,9 +11,11 @@
 #   "RM ..."  events of the main (forwarded by the link reader below)
 #
 # Pairing rules
-#   notebook          -> same folder path + name on the other tablet (created if missing),
-#                        same page count (pages are added, never deleted), same page; a page
-#                        added in the middle or pages moved are added / moved at the same place
+#   notebook          -> one shared notebook in book mode (see dualrm-notebook.sh): the same
+#                        folder path + name on the other tablet (created if missing), its pages
+#                        mapped to this one's ($D/pagemap/); pages added, moved or deleted follow,
+#                        strokes are copied when it opens and closes. A pair met for the first
+#                        time is merged: left tablet's page i, then the other tablet's page i.
 #   pdf/epub present on both (same document id, e.g. via reMarkable cloud)
 #                     -> book mode: one tablet shows the left page, the other the right page
 #   pdf/epub missing on the other tablet
@@ -25,9 +27,9 @@
 # The newer file wins; a replaced file is kept in $D/backup/ on the tablet it was replaced on.
 # Pen settings (pen, colour, width) of paired documents follow each other; when a pair opens,
 # the main's settings win. In book mode a page turn by hand moves two pages at once on either
-# tablet (one page alone). Scrolling a notebook page on one tablet scrolls the same page on the
-# other (notebooks only, not PDF/EPUB). Going to sleep on one tablet puts the other to sleep too (waking
-# up is per tablet: only the power button wakes a reMarkable).
+# tablet (one page alone). Scrolling a notebook page scrolls the other page of the spread to the
+# same height (notebooks only, not PDF/EPUB). Going to sleep on one tablet puts the other to sleep
+# too (waking up is per tablet: only the power button wakes a reMarkable).
 # Echoes (the other tablet reporting what we just told it to do) are recognised and dropped.
 . /home/root/dualrm/dualrm-lib.sh
 KEY=$D/id_dualrm
@@ -37,6 +39,7 @@ BOOK_LEFT=main          # tablet showing the left page in book mode (main | sub)
 BOOK_COVER=0            # 1: first page alone on the right, like a printed book
 [ -f "$D/dualrm.conf" ] && . "$D/dualrm.conf"
 . /home/root/dualrm/dualrm-discover.sh
+. /home/root/dualrm/dualrm-notebook.sh
 
 mkfifos
 trap 'rm -f "$D/events.reader"' EXIT
@@ -209,6 +212,7 @@ mirror_path() { # side path -> uuid of the notebook at that path on side (folder
     if [ -z "$doc" ]; then
         doc=$(req "$1" create "${parent:--}" "$name") || return 1
         log "$1: created notebook '$name'"
+        : > "$D/created.$doc"       # a pair without history: its first pages are mapped, no merge
     fi
     echo "$doc"
 }
@@ -337,9 +341,12 @@ ann_locked() { # command...: one annotation copy at a time
 }
 
 BS=""; BM=""    # the book-mode pair: sub's document, main's document
-book_end() { # book mode is over: copy annotations both ways once both have saved
-    [ -n "$BS" ] && [ "$LINK" = 1 ] && ( sleep 3; ann_locked ann_sync "$BS" "$BM" both ) &
-    BS=""; BM=""
+BMAP=""         # a shared notebook's page map for ann_sync ("-": none yet, copy nothing)
+COVER=0         # the pair's cover page: BOOK_COVER for PDF/EPUB, 0 for notebooks
+book_end() { # book mode is over: copy annotations both ways once both have saved (a notebook
+             # through its map, never without one)
+    [ -n "$BS" ] && [ "$LINK" = 1 ] && [ "$BMAP" != - ] && ( sleep 3; ann_locked ann_sync "$BS" "$BM" both $BMAP ) &
+    BS=""; BM=""; BMAP=""; NB=0
 }
 
 goto() { # side page: show page on side unless it is there already
@@ -349,10 +356,11 @@ goto() { # side page: show page on side unless it is there already
 }
 
 # ---------------------------------------------------------------- book mode page math
-# Spread s holds left page 2s-COVER and right page 2s+1-COVER (0-based page indices).
-spread() { echo $(( ($1 + BOOK_COVER) / 2 )); }
+# Spread s holds left page 2s-COVER and right page 2s+1-COVER (0-based page indices). COVER is
+# the pair's: BOOK_COVER for PDF/EPUB, 0 for a shared notebook (its spreads are whole).
+spread() { echo $(( ($1 + COVER) / 2 )); }
 rolepage() { # side spread -> page index on that side (-1: none)
-    if [ "$1" = "$BOOK_LEFT" ]; then echo $(( 2 * $2 - BOOK_COVER )); else echo $(( 2 * $2 + 1 - BOOK_COVER )); fi
+    if [ "$1" = "$BOOK_LEFT" ]; then echo $(( 2 * $2 - COVER )); else echo $(( 2 * $2 + 1 - COVER )); fi
 }
 
 book_sync() { # side oldpage: side moved; put both tablets on the right spread
@@ -386,15 +394,6 @@ pages_sync() { # side oldpage oldcount: side's pages changed; bring the other ta
     pc=$(get PC "$x"); cp=$(get CP "$x"); ypc=$(get PC "$y")
     case "$MODE" in
         book) book_sync "$x" "$q" ;;
-        mirror)
-            # pages added in the middle came as ADDED (on_added) before this; what is still
-            # missing (an older patch, a page added while apart) is appended
-            if [ "$ypc" -lt "$pc" ]; then
-                now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
-                t=$(req "$y" ensure "$pc" "$cp") && [ "$t" -gt "$ypc" ] && { put PC "$y" "$t"; log "$y: $((t - ypc)) page(s) added -> $t"; }
-            else
-                goto "$y" "$cp"
-            fi ;;
         lazy)
             if [ "$(get FT "$x")" = notebook ]; then
                 # paging the blank notebook pages the document
@@ -431,7 +430,8 @@ on_doc() { # side uuid ft path
     [ "$LINK" = 1 ] || return       # no main: just remember; the main's state wins at link up
     # a document was opened by hand on x
     target=""
-    book_end
+    book_end        # the previous pair's copy at close needs its BS/BM/BMAP: reset after it
+    NB=0; NB_REFRESHED=0; COVER=$BOOK_COVER; BMAP=""
     case "$3" in
         pdf|epub)
             target=$(pair_of "$x" "$u" "$3" "$4") || target=$(copy_doc "$x" "$u" "$3" "$4")
@@ -439,14 +439,19 @@ on_doc() { # side uuid ft path
             else target=$(mirror_path "$y" "$4") && MODE=lazy
             fi ;;
         *)
-            target=$(mirror_path "$y" "$4") && MODE=mirror ;;
+            target=$(mirror_path "$y" "$4") && MODE=book && NB=1 && COVER=0 ;;
     esac
     if [ -z "$target" ]; then log "no counterpart on $y for '$(echo "$4" | tr "$US" /)'"; MODE=""; return; fi
     LEAD=$x
     if [ "$MODE" = book ]; then
         if [ "$x" = sub ]; then BS=$u; BM=$target; dir=tomain; else BS=$target; BM=$u; dir=tosub; fi
+        if [ "$NB" = 1 ]; then
+            # strokes go through the map; a pair without one (first meeting) copies nothing
+            NBMAP=$D/pagemap/$BS; NBNAME=${4##*"$US"}; BMAP=-
+            nb_mapok && BMAP=$NBMAP
+        fi
         # the other tablet reads its pages when it opens the document: copy before that
-        [ "$(get DOC "$y")" = "$target" ] || ann_locked ann_sync "$BS" "$BM" "$dir"
+        [ "$(get DOC "$y")" = "$target" ] || [ "$BMAP" = - ] || ann_locked ann_sync "$BS" "$BM" "$dir" $BMAP
     fi
     if [ "$(get DOC "$y")" = "$target" ]; then
         PENDING=""
@@ -455,7 +460,17 @@ on_doc() { # side uuid ft path
         req "$y" open "$target" >/dev/null || { put EXPDOC "$y" ""; PENDING=""; MODE=""; return; }
     fi
     log "$x opened '$(echo "$4" | tr "$US" /)' ($3) -> $y $target, $MODE mode"
-    [ -z "$PENDING" ] && { pages_sync "$x" -1 0; pen_align; step_align; scroll_to "$y" "$(get SCR "$x")"; }
+    [ -z "$PENDING" ] && pair_ready
+}
+
+pair_ready() { # the pair is open on both: line them up (a notebook's pages first)
+    if [ "$NB" = 1 ]; then
+        nb_ready || log "notebook: pages not in step (see above)"
+        nb_mapok && BMAP=$NBMAP
+        [ -n "$PENDING" ] && return       # a refresh reopens both: lined up when that is done
+        nb_where "$LEAD"                  # pages moved under the leader's last report
+    fi
+    pages_sync "$LEAD" -1 0; pen_align; step_align; scroll_to "$(other "$LEAD")" "$(get SCR "$LEAD")"
 }
 
 on_page() { # side uuid pagecount currentpage
@@ -465,11 +480,15 @@ on_page() { # side uuid pagecount currentpage
     [ -n "$MODE" ] || return
     if [ -n "$PENDING" ]; then
         # the other tablet finished opening its counterpart: line it up with the leader
-        [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && {
-            PENDING=""; pages_sync "$LEAD" -1 0; pen_align; step_align; scroll_to "$(other "$LEAD")" "$(get SCR "$LEAD")"; }
+        [ "$PENDING" = "$x" ] && [ -z "$(get EXPDOC "$x")" ] && [ "$4" -ge 0 ] && { PENDING=""; pair_ready; }
         return
     fi
     now
+    # the sync just changed this notebook's pages: these reports are that settling
+    if [ "$NB" = 1 ] && [ "$NOW" -le "$NBQ" ]; then
+        [ "$4" = "$(get EXPPG "$x")" ] && put EXPPG "$x" ""
+        return
+    fi
     e=$(get EXPPG "$x")
     if [ -n "$e" ] && [ $((NOW - $(get EXPT "$x"))) -le 5 ]; then
         # we moved this tablet: drop the reports on the way there, and the arrival itself
@@ -481,50 +500,28 @@ on_page() { # side uuid pagecount currentpage
     pages_sync "$x" "$q" "$qc"
 }
 
-# Pages moved on one tablet (page overview: Move) are moved the same way on the other: the patch
-# reports the new order as positions of the old one ("2,0,1": the old third page is now first),
-# which maps onto the other tablet's pages by position (each tablet has its own page ids).
-# Pages added on one tablet are added at the same positions on the other (ADDED: positions in the
-# new order, ascending, so adding them one by one in that order gives the same layout).
-on_added() { # side uuid positions
-    x=$1; [ "$2" = "$(get DOC "$x")" ] || return
-    [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
-    y=$(other "$x")
-    for j in $(echo "$3" | tr , ' '); do
-        now; put EXPPG "$y" "$j"; put EXPT "$y" "$NOW"; moved "$y"
-        req "$y" addpage "$j" >/dev/null && put PC "$y" $(( $(get PC "$y") + 1 )) && log "$y: page added at $j like on $x"
-    done
-}
-
-on_order() { # side uuid perm
-    x=$1; [ "$2" = "$(get DOC "$x")" ] || return
-    [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
-    y=$(other "$x"); cp=$(get CP "$x")
-    now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
-    req "$y" reorder "$3" "$cp" >/dev/null && log "$y: pages moved like on $x ($3)"
-}
-
 # ---------------------------------------------------------------- notebook scrolling
-# A notebook page scrolled on one tablet is scrolled to the same place on the other (mirror
-# mode only: PDF/EPUB pages are not followed). A tablet we just opened, paged or scrolled
-# reports where it settles: those reports are dropped for SCROLL_QUIET.
+# A shared notebook's page scrolled on one tablet: the other page of the spread, on the other
+# tablet, is scrolled to the same height (PDF/EPUB pages are not followed). A tablet we just
+# opened, paged or scrolled reports where it settles: those reports are dropped for SCROLL_QUIET.
 SCR_main=""; SCR_sub=""         # "<page> <top>" each tablet last reported
 SCRT_main=0; SCRT_sub=0         # when we last moved each tablet (1/100 s)
 SCROLL_QUIET=250
 moved() { tick; put SCRT "$1" "$TICK"; }
 
-scroll_to() { # side "<page> <top>": scroll side's page like the other tablet's
+scroll_to() { # side "<page> <top>": scroll side's page of the same spread to the same height
     _y=$1; set -f; set -- $2; set +f
-    [ "$MODE" = mirror ] && [ -z "$PENDING" ] && [ -n "$2" ] || return 0
-    [ "$(get CP "$_y")" = "$1" ] || [ "$(get EXPPG "$_y")" = "$1" ] || return 0
+    [ "$NB" = 1 ] && [ "$MODE" = book ] && [ -z "$PENDING" ] && [ -n "$2" ] || return 0
+    _p=$(rolepage "$_y" "$(spread "$1")")
+    [ "$(get CP "$_y")" = "$_p" ] || [ "$(get EXPPG "$_y")" = "$_p" ] || return 0
     moved "$_y"
-    req "$_y" setscroll "$1" "$2" >/dev/null
+    req "$_y" setscroll "$_p" "$2" >/dev/null
 }
 
 on_scroll() { # side uuid page top
     [ "$2" = "$(get DOC "$1")" ] || return
     put SCR "$1" "$3 $4"
-    [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
+    [ "$NB" = 1 ] && [ "$MODE" = book ] && [ -z "$PENDING" ] || return
     tick; [ $((TICK - $(get SCRT "$1"))) -lt $SCROLL_QUIET ] && return
     scroll_to "$(other "$1")" "$3 $4"
 }
@@ -591,7 +588,7 @@ rm -f "$D/linked"
 link_loop &
 # keeps the main's link end from timing out; only while linked (nobody reads the fifo otherwise)
 ( while sleep 30; do [ -f "$D/linked" ] && echo PING >&4; done ) &
-log "sync v11 (event driven, both ways, copies PDFs and annotations, pens, notebook scroll, sleep, link indicator, WiFi discovery)"
+log "sync v12 (event driven, both ways, shared notebooks, copies PDFs and annotations, pens, scroll, sleep, link indicator, WiFi discovery)"
 CLOSING_FROM=""
 local_request link - >/dev/null   # no link yet (an indicator may be left from a killed sync)
 local_request emit >/dev/null
@@ -618,12 +615,9 @@ while :; do
         SCROLL\ *)
             set -f; set -- $body; set +f
             on_scroll "$side" "$2" "$3" "$4" ;;
-        ADDED\ *)
+        PAGES\ *)
             set -f; set -- $body; set +f
-            on_added "$side" "$2" "$3" ;;
-        ORDER\ *)
-            set -f; set -- $body; set +f
-            on_order "$side" "$2" "$3" ;;
+            on_pages "$side" "$2" "$3" ;;
         SLEEP) on_sleep "$side" ;;
         WAKE) on_wake "$side" ;;
         LINKUP\ *)
@@ -639,6 +633,6 @@ while :; do
             # same there). Not after a session that never came up: nothing to undo.
             rm -f "$D/linked"
             [ "$LINK" = 1 ] && local_request link - >/dev/null
-            LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM="" ;;
+            LINK=0; MODE=""; PENDING=""; CLOSING_FROM=""; BS=""; BM=""; NB=0; BMAP="" ;;
     esac
 done
