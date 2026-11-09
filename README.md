@@ -9,11 +9,17 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
 
 ## Features
 
-- **Notebooks**: the other tablet opens the notebook with the same name in the same folder
-  (folders and a blank notebook are created if missing) and keeps the same page count and
-  page. A page added in the middle, or pages moved in the page overview, are added / moved at
-  the same place on the other tablet. Each tablet keeps its own strokes: notebook content is
-  not copied.
+- **Notebooks**: one notebook on both tablets, in book mode like a PDF: the main shows the left
+  page, the sub the right page, and either tablet alone shows the whole notebook. The other
+  tablet uses the notebook with the same name in the same folder (created if missing). Pages
+  added, moved or deleted on one tablet follow on the other: "add page" adds a whole spread
+  (two blank pages), deleting a page also deletes its partner page when that one is blank.
+  Strokes are copied when the notebook is opened and closed, not live; after a page move that
+  brings pages with new strokes to the other tablet, both tablets close and reopen the
+  notebook once (2-4 s).
+- **Notebooks from before** (each tablet with its own pages under the same name) are merged the
+  first time they are opened together: main page 1, sub page 1, main page 2, ... so each spread
+  looks as before. Both originals are kept in `dualrm/merged/<date-time>/` on each tablet.
 - **Book mode** (PDF / EPUB present on both tablets, e.g. through the reMarkable cloud):
   one tablet shows the left page, the other the right page. A swipe or page key on either
   tablet turns the spread on both, in one step. Jumping to a page (page list, search, link)
@@ -51,10 +57,8 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 | Feature | State |
 |---|---|
 | Open / close follows, both ways | works |
-| Notebook page count / current page, both ways | works (pages are added, never deleted) |
-| Pages moved in the page overview, both ways | works |
-| Page added in the middle, both ways | new, not yet tested on the tablets |
-| Notebook scroll position, both ways | works |
+| Notebooks as one shared notebook in book mode (pages, strokes, merge of old pairs) | new, not yet tested on the tablets |
+| Notebook scroll position (spread), both ways | new, not yet tested on the tablets |
 | Book mode for PDFs on both tablets | works |
 | Book mode page turn in one step | new, not yet tested on the tablets |
 | PDF / EPUB missing on one tablet: copied over | works |
@@ -90,7 +94,7 @@ decides) and logs in to the **main** over SSH. Pick as sub:
 
 On a USB cable either tablet can sit on either side of the adapter (see [USB cable](#usb-cable)).
 
-Book mode puts the main on the left by default (`BOOK_LEFT` in [Configuration](#configuration)).
+Book mode puts the main on the left by default (`BOOK_LEFT` in [Configuration](#configuration)). This holds for notebooks too.
 
 ## Install
 
@@ -133,8 +137,8 @@ If you already start xovi another way, disable it: `systemctl disable dualrm-xov
 ```
 
 Removes the services, scripts and patch, takes the sub's key off the main and restarts
-xochitl. xovi and its other extensions stay. Annotation backups are kept in
-`/home/root/dualrm-backup`.
+xochitl. xovi and its other extensions stay. Annotation backups and the notebooks as they were
+before merging are kept in `/home/root/dualrm-backup` (`merged/` for the notebooks).
 
 ## Configuration
 
@@ -143,8 +147,10 @@ xochitl. xovi and its other extensions stay. Annotation backups are kept in
 ```sh
 MAIN_LAN=192.168.1.50   # optional: the main's WiFi address, tried first; empty: found by itself
 BOOK_LEFT=main          # tablet showing the left page in book mode: main | sub
-BOOK_COVER=0            # 1: first page alone on the right, like a printed book
+BOOK_COVER=0            # 1: first page alone on the right, like a printed book (PDF / EPUB only)
 ```
+
+Notebooks always start with a whole spread, so `BOOK_COVER` does not apply to them.
 
 ## Using it
 
@@ -157,6 +163,8 @@ BOOK_COVER=0            # 1: first page alone on the right, like a printed book
   other is in `dualrm/backup/`.
 - Annotations of a copied PDF are matched by PDF page, so pages inserted into a copy are not
   copied. EPUB copies are not matched at all (each tablet lays out the pages itself).
+- A notebook's page template changed later (lines, grid) is not followed on the other tablet;
+  pages added by the sync take their partner page's template.
 - Firmware 3.29 names an imported copy without the `.pdf` extension, 3.23 keeps it.
 
 ## Connecting the tablets
@@ -237,6 +245,11 @@ systemctl disable --now dualrm-usbrole               # (either) USB-C back to de
   `sync.log` on each tablet shows its role: `gadget` = powered, `host` = not). Main as host:
   the sub needs the main's id (see [WiFi](#wifi)) and the main's log shows `other tablet
   attached (dualrm0, ...)`.
+- **Notebook pages out of step**: the sub's `sync.log` shows `notebook:` lines; the page map is
+  `dualrm/pagemap/<sub notebook id>`. A notebook pair with a missing or unusable map is paired
+  again the next time it is opened, and when both notebooks exist and neither is new, that
+  means merging them again (the pages double). To start over, delete the notebook on one
+  tablet (the other tablet then creates it again blank) rather than the map.
 - **The UI misbehaves after an update**: run `/home/root/xovi/stock` on that tablet, then
   rebuild the hash table and re-run `install.sh`. If it still fails, that firmware is not
   supported yet: please open an issue with the `journalctl` output above.
@@ -246,9 +259,7 @@ systemctl disable --now dualrm-usbrole               # (either) USB-C back to de
 ## Limitations
 
 - reMarkable 2 only; tested on the firmware versions above.
-- Notebook strokes are not copied between tablets; book-mode annotations are copied when a
-  document is opened or closed, not live.
-- Pages are added to keep notebooks the same length, never deleted.
+- Strokes and annotations are copied when a document is opened or closed, not live.
 - Waking from sleep is per tablet.
 - One pair of tablets per installation.
 
@@ -277,8 +288,8 @@ Nothing polls. Both tablets run the same pieces (`node/`):
 - **`dualrm.qmd`**, a qt-resource-rebuilder patch for xochitl. It reports document and page
   changes the moment they happen (`GET http://127.0.0.1:7781/ev?...`) and takes commands
   over a held request (`GET http://127.0.0.1:7782/next`): `open`, `close`, `status`,
-  `addpage`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`, `pen`, `setpen`,
-  `setscroll`, `pagestep`, `reorder`, `link`; events `DOC`, `PAGE`, `ADDED`, `ORDER`, `PEN`,
+  `addpage`, `delpages`, `pages`, `gotopage`, `ensure`, `mkdir`, `create`, `emit`, `import`,
+  `pen`, `setpen`, `setscroll`, `pagestep`, `reorder`, `link`; events `DOC`, `PAGE`, `PAGES`, `PEN`,
   `SCROLL`, `SLEEP`, `WAKE`.
 - **`dualrm-tray.qmd`**, a second patch: the link icon in the library's status icons. A file of
   its own, so a firmware whose header differs cannot stop the main patch from loading.
@@ -300,6 +311,11 @@ The sub additionally runs:
   events from both tablets, pairs documents and moves the other tablet. It recognises its
   own echoes (the other tablet reporting what it was just told to do). Copied PDFs are
   remembered in `dualrm/pairs`.
+- **`sub/dualrm-pagemap.sh` / `sub/dualrm-notebook.sh`**: shared notebooks. Each tablet keeps
+  its own page ids; a page map per notebook pair (`dualrm/pagemap/<sub notebook id>`) says which
+  pages are the same page. Page changes are replayed on the other tablet through xochitl's own
+  operations; strokes are copied file by file through the map (a pair met for the first time is
+  merged, originals in `dualrm/merged/`).
 - Sleep together works by pressing the other tablet's power key through its input device:
   xochitl refuses to go to sleep any other way.
 

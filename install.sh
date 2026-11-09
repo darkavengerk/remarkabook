@@ -118,7 +118,7 @@ EOF
 # sub: the same, plus sync and the pogo helpers
 echo "installing on the sub ($SUB)"
 logn=$(ssh "$SUB" 'wc -l < /home/root/dualrm/sync.log 2>/dev/null || echo 0')
-install_node "$SUB" -C ../sub dualrm-sync.sh dualrm-discover.sh dualrm-pogo.sh dualrm.conf.example systemd etc
+install_node "$SUB" -C ../sub dualrm-sync.sh dualrm-discover.sh dualrm-pagemap.sh dualrm-notebook.sh dualrm-pogo.sh dualrm.conf.example systemd etc
 ssh "$SUB" "MAIN_LAN='$MAIN_LAN' sh -s" <<'EOF'
 set -e
 D=/home/root/dualrm; T=/tmp/dualrm-install

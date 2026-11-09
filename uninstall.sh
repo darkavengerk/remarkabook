@@ -8,10 +8,11 @@
 #
 # Removes the services, scripts and the xochitl patch, takes the sub's key off the main and
 # puts both tablets' USB-C ports back into device mode. xovi itself and its other extensions stay.
-# Annotation backups (dualrm/backup) are kept in /home/root/dualrm-backup.
+# Annotation backups (dualrm/backup) and notebooks as they were before merging (dualrm/merged)
+# are kept in /home/root/dualrm-backup.
 # xochitl is restarted with xovi (if installed), so other extensions keep working.
 set -e
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-1}"; }
 YES=0
 [ "$1" = -h ] || [ "$1" = --help ] && usage 0
 [ "$1" = -y ] && { YES=1; shift; }
@@ -49,6 +50,10 @@ rm -f /home/root/xovi/exthome/qt-resource-rebuilder/dualrm.qmd /home/root/xovi/e
 if [ -d "$D/backup" ] && [ -n "$(ls -A "$D/backup")" ]; then
     mkdir -p /home/root/dualrm-backup && cp -a "$D/backup/." /home/root/dualrm-backup/
     echo "  annotation backups kept in /home/root/dualrm-backup"
+fi
+if [ -d "$D/merged" ] && [ -n "$(ls -A "$D/merged")" ]; then
+    mkdir -p /home/root/dualrm-backup/merged && cp -a "$D/merged/." /home/root/dualrm-backup/merged/
+    echo "  notebooks as they were before merging kept in /home/root/dualrm-backup/merged"
 fi
 rm -rf "$D"
 # reload xochitl without the patch (with xovi when it is installed)
