@@ -16,12 +16,17 @@
 #       added on the other side (the follower's new pages after their predecessor). Adds come
 #       in ascending index order: run them in that order, after the deletes. The follower's
 #       order is fixed afterwards with pm_perm.
+#       Preconditions: both lists non-empty, else exit 1 with no output (a failed `pages` query
+#       must not mean "all deleted"). del indices are descending (delete in this order). add
+#       indices on the follower side are positions in the leader's final order (the follower's
+#       real order is fixed afterwards with pm_perm).
 #   pm_merge <sublist> <mainlist> <left>
 #       interleave two notebooks that were never shared: left side's page i at 2i, the other
 #       side's page i at 2i+1; missing pages are blank. Prints "add <side> <index> <partner>",
 #       partner "=<row>" when the page is new on both sides (same row: map the two together).
 #   pm_perm <fromlist> <tolist>   -> "i0,i1,..." (page at position j of tolist was at i_j of
-#                                    fromlist); nothing when equal; 1 when the sets differ
+#                                    fromlist); nothing when equal; exit 1 when the sets differ
+#                                    or an id repeats
 #   pm_translate <list> <mapfile> <to>  -> the list in the other side's ids (to: sub | main);
 #                                    1 when a page has no mapping
 #   pm_spread_add <old> <new>     pages added on one tablet become a whole spread after the
@@ -33,12 +38,16 @@
 #                                 (blanklist), otherwise a blank page takes the deleted page's
 #                                 place. Prints "del <i,j,...>" (indices in new) and/or
 #                                 "add <index>" lines (ascending, after the delete)
+#       Preconditions of both pm_spread_*: old count even (not checked), only adds (or only deletes), no
+#       reorder (else no output: no plan). pm_spread_add gathers scattered added pages
+#       into one block.
 #   pm_sides <old> <new>          the pages whose side (left / right) changed
 #   pm_differ <subann> <mainann> <mapfile> <sublist>
 #                                 ann_list outputs of both notebooks: the sub id8s in sublist
 #                                 whose strokes (.rm md5) differ between the tablets
 
 pm_plan() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1       # an empty list is a failed query, not "all deleted"
     awk -v S="$1" -v M="$2" -v L="$4" '
         function split_list(s, a,    n) { if (s == "") return 0; return split(s, a, ",") }
         BEGIN {
@@ -50,12 +59,13 @@ pm_plan() {
         NF == 2 { sm[$1] = $2; ms[$2] = $1 }
         END {
             # deletes: a mapped page gone on one side goes on the other
-            dsub = ""; dmain = ""
             for (a in sm) {
                 b = sm[a]
-                if ((a in ps) && !(b in pm)) { dsub = dsub "," (ps[a] - 1); gone[a] = 1 }
-                if ((b in pm) && !(a in ps)) { dmain = dmain "," (pm[b] - 1); gone[b] = 1 }
+                if ((a in ps) && !(b in pm)) { ds[ps[a]] = 1; gone[a] = 1 }
+                if ((b in pm) && !(a in ps)) { dm[pm[b]] = 1; gone[b] = 1 }
             }
+            dsub = ""; for (i = ns; i >= 1; i--) if (i in ds) dsub = dsub "," (i - 1)
+            dmain = ""; for (i = nm; i >= 1; i--) if (i in dm) dmain = dmain "," (i - 1)
             if (dsub != "") print "del sub " substr(dsub, 2)
             if (dmain != "") print "del main " substr(dmain, 2)
             # leader rows, then the follower pages that are new after their predecessor
@@ -110,9 +120,9 @@ pm_perm() {
     awk -v A="$1" -v B="$2" 'BEGIN {
         na = split(A, a, ","); nb = split(B, b, ",")
         if (na != nb) exit 1
-        for (i = 1; i <= na; i++) p[a[i]] = i - 1
+        for (i = 1; i <= na; i++) { if (a[i] in p) exit 1; p[a[i]] = i - 1 }
         o = ""
-        for (j = 1; j <= nb; j++) { if (!(b[j] in p)) exit 1; o = o "," p[b[j]] }
+        for (j = 1; j <= nb; j++) { if (!(b[j] in p) || (b[j] in used)) exit 1; used[b[j]] = 1; o = o "," p[b[j]] }
         print substr(o, 2)
     }'
 }
@@ -133,12 +143,15 @@ pm_spread_add() {
     awk -v O="$1" -v N="$2" 'BEGIN {
         no = split(O, o, ","); nn = split(N, n, ",")
         for (i = 1; i <= no; i++) had[o[i]] = 1
+        for (j = 1; j <= nn; j++) inn[n[j]] = 1
+        for (i = 1; i <= no; i++) if (!(o[i] in inn)) exit 0     # pages deleted too: not a pure add
         nb = 0; first = 0; nk = 0
         for (j = 1; j <= nn; j++) {
             if (n[j] in had) { keep[++nk] = n[j]; continue }
             blk[++nb] = n[j]; if (!first) { first = j; pre = nk }
         }
         if (nb == 0) exit 0
+        for (i = 1; i <= nk; i++) if (keep[i] != o[i]) exit 0   # reordered too: no plan
         # pre = kept pages before the first added one; the block goes after their spread
         b = (pre == 0) ? 0 : 2 * int((pre - 1) / 2) + 2
         if (b > nk) b = nk
@@ -160,6 +173,7 @@ pm_spread_del() {
         for (j = 1; j <= nn; j++) { pn[n[j]] = j - 1 }
         for (i = 1; i <= no; i++) had[o[i]] = 1
         for (j = 1; j <= nn; j++) if (!(n[j] in had)) exit 0     # pages added too: not a delete
+        k2 = 0; for (i = 1; i <= no; i++) if (o[i] in pn) { if (n[++k2] != o[i]) exit 0 }   # reordered: no plan
         nbl = split(B, bl, ","); for (i = 1; i <= nbl; i++) blank[bl[i]] = 1
         dels = ""; nf = 0; any = 0
         for (i = 1; i <= no; i += 2) {
@@ -199,6 +213,6 @@ pm_sides() { # <old> <new> -> the pages (in new) whose side changed: left <-> ri
         for (i = 1; i <= na; i++) p[a[i]] = i
         o = ""
         for (j = 1; j <= nb; j++) if ((b[j] in p) && (p[b[j]] - j) % 2) o = o "," b[j]
-        print substr(o, 2)
+        if (o != "") print substr(o, 2)
     }'
 }

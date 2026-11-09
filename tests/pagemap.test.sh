@@ -29,6 +29,13 @@ check "plan: page deleted on sub, sub leads" "$(pm_plan s1,s3 m1,m2,m3 "$MAP" su
 check "plan: moved only, nothing to add" "$(pm_plan s1,s2,s3 m3,m1,m2 "$MAP" main | lines)" ""
 check "plan: unmapped follower page first" "$(pm_plan s9,s1,s2,s3 m1,m2,m3 "$MAP" main | lines)" "add main 0 s9"
 
+mkmap s1:m1 s2:m2 s3:m3 s4:m4 s5:m5
+check "plan: deletes on both sides, descending" \
+    "$(pm_plan s1,s2,s4,s5 m1,m3,m5 "$MAP" main | lines)" "del sub 2,1;del main 1"
+pm_plan "" m1 "$MAP" main >/dev/null; check "plan: empty sub list fails" "$?" 1
+pm_plan s1 "" "$MAP" main >/dev/null; check "plan: empty main list fails" "$?" 1
+check "plan: empty list prints nothing" "$(pm_plan "" m1 "$MAP" main 2>&1)" ""
+
 # ---- pm_merge (left = main)
 check "merge: 2 + 2" "$(pm_merge s1,s2 m1,m2 main | lines)" \
     "add main 1 s1;add main 3 s2;add sub 0 m1;add sub 2 m2"
@@ -36,12 +43,18 @@ check "merge: main longer" "$(pm_merge s1 m1,m2 main | lines)" \
     "add main 1 s1;add main 3 =3;add sub 0 m1;add sub 2 m2;add sub 3 =3"
 check "merge: sub longer" "$(pm_merge s1,s2 m1 main | lines)" \
     "add main 1 s1;add main 2 =2;add main 3 s2;add sub 0 m1;add sub 2 =2"
+check "merge: sub has no pages" "$(pm_merge "" m1 main | lines)" \
+    "add main 1 =1;add sub 0 m1;add sub 1 =1"
+check "merge: main has no pages" "$(pm_merge s1 "" main | lines)" \
+    "add main 0 =0;add main 1 s1;add sub 0 =0"
 check "merge: left = sub" "$(pm_merge s1 m1 sub | lines)" "add main 0 s1;add sub 1 m1"
 
 # ---- pm_perm / pm_translate
 check "perm: same lists" "$(pm_perm a,b,c a,b,c)" ""
 check "perm: moved" "$(pm_perm a,b,c c,a,b)" "2,0,1"
 pm_perm a,b a,c >/dev/null; check "perm: different sets fail" "$?" 1
+pm_perm a,a,b a,b,b >/dev/null; check "perm: repeated id fails" "$?" 1
+pm_perm a,b,c a,a,b >/dev/null; check "perm: repeated id in target fails" "$?" 1
 mkmap s1:m1 s2:m2
 check "translate: main -> sub" "$(pm_translate m2,m1 "$MAP" sub)" "s2,s1"
 check "translate: sub -> main" "$(pm_translate s1,s2 "$MAP" main)" "m1,m2"
@@ -53,6 +66,10 @@ check "spread add: after b (right page)" "$(pm_spread_add a,b,c,d a,b,n,c,d | li
 check "spread add: at the end" "$(pm_spread_add a,b,c,d a,b,c,d,n | lines)" "pad 5"
 check "spread add: before the first page" "$(pm_spread_add a,b,c,d n,a,b,c,d | lines)" "pad 1"
 check "spread add: two pages after c" "$(pm_spread_add a,b,c,d a,b,c,n,o,d | lines)" "order a,b,c,d,n,o"
+check "spread add: odd block of 3 after b" "$(pm_spread_add a,b,c,d a,b,n,o,p,c,d | lines)" "pad 5"
+check "spread add: scattered pages gathered" "$(pm_spread_add a,b,c,d a,n,b,c,o,d | lines)" "order a,b,n,o,c,d"
+check "spread add: pages deleted too" "$(pm_spread_add a,b,c,d a,n,c,d | lines)" ""
+check "spread add: reordered too" "$(pm_spread_add a,b,c,d b,a,n,c,d | lines)" ""
 check "spread add: nothing added" "$(pm_spread_add a,b,c,d a,b,c,d | lines)" ""
 
 # ---- pm_spread_del
@@ -61,6 +78,7 @@ check "spread del: partner with strokes stays" "$(pm_spread_del a,b,c,d a,c,d ""
 check "spread del: left page deleted, right kept" "$(pm_spread_del a,b,c,d b,c,d "" | lines)" "add 0"
 check "spread del: left page deleted, right blank goes too" "$(pm_spread_del a,b,c,d b,c,d b | lines)" "del 0"
 check "spread del: whole spread deleted" "$(pm_spread_del a,b,c,d c,d "" | lines)" ""
+check "spread del: reordered too" "$(pm_spread_del a,b,c,d c,d,a "" | lines)" ""
 check "spread del: nothing deleted" "$(pm_spread_del a,b,c,d a,b,c,d "" | lines)" ""
 check "spread del: pages added too" "$(pm_spread_del a,b,c,d a,c,d,n "" | lines)" ""
 
@@ -70,8 +88,13 @@ printf 'P s1aaaaaa-x - \nF rm s1aaaaaa-x 100 aaa\nF rm s2aaaaaa-x 100 bbb\n' > "
 printf 'P m1aaaaaa-x - \nF rm m1aaaaaa-x 100 aaa\nF rm m2aaaaaa-x 100 ccc\n' > "$T/m"
 check "differ" "$(pm_differ "$T/s" "$T/m" "$MAP" s1aaaaaa,s2aaaaaa)" "s2aaaaaa"
 
+printf 'P s1aaaaaa-x - \nF rm s1aaaaaa-x 100 aaa\n' > "$T/s"
+printf 'P m1aaaaaa-x - \nP m2aaaaaa-x - \nF rm m2aaaaaa-x 100 ccc\n' > "$T/m"
+check "differ: .rm on one side only" "$(pm_differ "$T/s" "$T/m" "$MAP" s1aaaaaa,s2aaaaaa | lines)" "s1aaaaaa;s2aaaaaa"
+
 # ---- pm_sides
 check "sides: moved to the front" "$(pm_sides a,b,c,d c,a,b,d)" "a,b"
 check "sides: spread moved" "$(pm_sides a,b,c,d c,d,a,b)" ""
+check "sides: nothing prints no line" "$(pm_sides a,b,c,d c,d,a,b | wc -l | tr -d ' ')" "0"
 
 [ $FAIL = 0 ] && echo PASS || { echo FAILED; exit 1; }
