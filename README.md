@@ -14,6 +14,8 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
   tablet uses the notebook with the same name in the same folder (created if missing). Pages
   added, moved or deleted on one tablet follow on the other: "add page" adds a whole spread
   (two blank pages), deleting a page also deletes its partner page when that one is blank.
+  A notebook keeps its page count; when the tablets go to a last spread that has only one
+  page, a blank page is added at the end so the other tablet has its page.
   Strokes are copied when the notebook is opened and closed, not live; after a page move that
   brings pages with new strokes to the other tablet, both tablets close and reopen the
   notebook once (a few seconds).
@@ -157,7 +159,7 @@ BOOK_LEFT=main          # tablet showing the left page in book mode: main | sub
 BOOK_COVER=0            # 1: first page alone on the right, like a printed book (PDF / EPUB only)
 ```
 
-Notebooks always start with a whole spread, so `BOOK_COVER` does not apply to them.
+A notebook's first spread is its first two pages, so `BOOK_COVER` does not apply to notebooks.
 
 ## Using it
 
@@ -170,6 +172,7 @@ Notebooks always start with a whole spread, so `BOOK_COVER` does not apply to th
   other is in `dualrm/backup/`.
 - Annotations of a copied PDF are matched by PDF page, so pages inserted into a copy are not
   copied. EPUB copies are not matched at all (each tablet lays out the pages itself).
+- Quick sheets stays per tablet: opening it on one tablet leaves the other alone.
 - A notebook's page template changed later (lines, grid) is not followed on the other tablet;
   pages added by the sync take their partner page's template.
 - Firmware 3.29 names an imported copy without the `.pdf` extension, 3.23 keeps it.

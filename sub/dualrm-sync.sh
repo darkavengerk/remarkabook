@@ -16,6 +16,7 @@
 #                        mapped to this one's ($D/pagemap/); pages added, moved or deleted follow,
 #                        strokes are copied when it opens and closes. A pair met for the first
 #                        time is merged: left tablet's page i, then the other tablet's page i.
+#                        Quick sheets (top level) stays per tablet: never paired.
 #   pdf/epub present on both (same document id, e.g. via reMarkable cloud)
 #                     -> book mode: one tablet shows the left page, the other the right page
 #   pdf/epub missing on the other tablet
@@ -369,6 +370,8 @@ book_sync() { # side oldpage: side moved; put both tablets on the right spread
         fi
     fi
     [ "$s" -lt 0 ] && s=0
+    # a shared notebook's last spread with one page: the other tablet gets a blank page there
+    [ "$NB" = 1 ] && pm_spread_short "$pc" "$s" && nb_pad && pc=$(get PC "$x")
     tx=$(rolepage "$x" "$s"); ty=$(rolepage "$y" "$s")
     [ "$tx" -ge "$pc" ] && tx=$((pc - 1))
     [ "$ty" -ge "$pc" ] && ty=$((pc - 1))
@@ -425,6 +428,10 @@ on_doc() { # side uuid ft path
     target=""
     book_end        # the previous pair's copy at close needs its BS/BM/BMAP: reset after it
     NB=0; NB_REFRESHED=0; COVER=$BOOK_COVER; BMAP=""
+    if quick_sheets "$3" "$4"; then
+        # per tablet: not opened on the other one, which keeps what it shows
+        log "Quick sheets: not shared"; MODE=""; PENDING=""; return
+    fi
     case "$3" in
         pdf|epub)
             target=$(pair_of "$x" "$u" "$3" "$4") || target=$(copy_doc "$x" "$u" "$3" "$4")

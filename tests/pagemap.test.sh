@@ -110,6 +110,12 @@ check "idmap: nothing in common" "$(pm_idmap a,b c,d | lines)" ""
 check "posmap: same count" "$(pm_posmap s1,s2 m1,m2 | lines)" "s1 m1;s2 m2"
 check "posmap: as far as both go" "$(pm_posmap s1,s2,s3 m1 | lines)" "s1 m1"
 
+# ---- a half last spread
+pm_spread_short 3 1; check "short: 3 pages, spread 1 (page 2 alone)" "$?" 0
+pm_spread_short 1 0; check "short: 1 page, spread 0" "$?" 0
+pm_spread_short 3 0; check "not short: spread 0 of 3 pages" "$?" 1
+pm_spread_short 4 1; check "not short: even count" "$?" 1
+
 # ---- delete guard
 pm_del_ok 0 4 0; check "del ok: nothing" "$?" 0
 pm_del_ok 6 12 0; check "del ok: 6 of 12" "$?" 0

@@ -208,13 +208,18 @@ nb_order() { # leader: put the other tablet's pages in the leader's order
     log "$nb_f: pages put in $1's order"
 }
 
-nb_pad() { # an odd page count gets a blank page at the end on both: whole spreads
+nb_pad() { # the tablets go to the last spread and it has one page (odd count): a blank page
+           # at the end on both, so the other tablet has its page. Only then: a notebook keeps
+           # the page count it was given until its last spread is shown. -> PC_* (0: added)
+    nb_lists || return 1
     nb_c=$(nb_count "$PL_main")
-    [ $((nb_c % 2)) = 1 ] || return 0
+    [ "$nb_c" = "$(nb_count "$PL_sub")" ] && [ $((nb_c % 2)) = 1 ] || return 1
     nb_run "add main $nb_c =pad
 add sub $nb_c =pad"; nb_r=$?
-    nb_lists || return 1
-    [ "$nb_r" = 0 ] && log "notebook: blank page added at the end (whole spreads)"
+    nb_lists
+    [ "$nb_r" = 0 ] || return 1
+    put PC main $((nb_c + 1)); put PC sub $((nb_c + 1))
+    log "notebook: blank page added at the end (the last spread had one page)"
 }
 
 nb_sync() { # leader: both tablets get the same pages, in the leader's order
@@ -227,7 +232,7 @@ nb_sync() { # leader: both tablets get the same pages, in the leader's order
         [ "$nb_r" = 0 ] || return 1
         nb_prune
     fi
-    nb_order "$1" && nb_pad
+    nb_order "$1"
 }
 
 nb_differs() { # sub-id8 list -> those whose strokes differ between the tablets; 1: unknown
@@ -386,13 +391,13 @@ nb_diff() { # list-a list-b -> the ids of a that are not in b, comma-separated
 nb_spread_add() { # x old new: pages added on x become a whole spread there -> NB_SHOW
     nb_ops=$(pm_spread_add "$2" "$3")
     nb_first=$(nb_diff "$3" "$2"); nb_first=${nb_first%%,*}
-    nb_to=$(echo "$nb_ops" | sed -n 's/^order //p'); nb_pad=$(echo "$nb_ops" | sed -n 's/^pad //p')
+    nb_to=$(echo "$nb_ops" | sed -n 's/^order //p'); nb_pd=$(echo "$nb_ops" | sed -n 's/^pad //p')
     nb_tf=$(nb_tpl "$1" "$nb_first")     # PL/TP of x are new: the template of the added page
     if [ -n "$nb_to" ]; then
         req "$1" reorder "$(pm_perm "$3" "$nb_to")" >/dev/null; nb_quiet
     fi
-    if [ -n "$nb_pad" ]; then
-        req "$1" addpage "$nb_pad" "$nb_tf" >/dev/null; nb_quiet
+    if [ -n "$nb_pd" ]; then
+        req "$1" addpage "$nb_pd" "$nb_tf" >/dev/null; nb_quiet
     fi
     nb_lists || return 1
     NB_SHOW=$(get PL "$1" | tr , '\n' | grep -nxF "$nb_first" | cut -d: -f1)
@@ -472,6 +477,8 @@ on_pages() { # side uuid list: pages added, moved or deleted on x
     if [ -n "$NB_SHOW" ]; then s=$(spread "$NB_SHOW"); else s=$(spread "$(get CP "$x")"); fi
     [ "$s" -ge 0 ] 2>/dev/null || s=0
     nb_c=$(nb_count "$(get PL "$x")")
+    [ $((2 * s)) -lt "$nb_c" ] || s=$(( (nb_c - 1) / 2 ))     # pages gone: the last spread
+    pm_spread_short "$nb_c" "$s" && nb_pad && nb_c=$((nb_c + 1))
     put PC "$x" "$nb_c"; put PC "$y" "$nb_c"
     put CP "$y" -1      # unknown after our changes there: goto always goes
     goto "$x" "$(rolepage "$x" "$s")"; goto "$y" "$(rolepage "$y" "$s")"

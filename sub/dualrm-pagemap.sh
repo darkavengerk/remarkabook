@@ -48,7 +48,9 @@
 #   pm_del_ok <dels> <pages> <adds> may a run delete <dels> of a side's <pages> pages (and add
 #                                 <adds>)? Not more than half of them when more than 10, and
 #                                 never all of them (a broken map must not empty a notebook; one
-#                                 page left gets its spread back from nb_pad)
+#                                 page left gets a blank partner when its spread is shown)
+#   pm_spread_short <count> <spread>  is spread s the last one with its right page missing (odd
+#                                 count)? Then a blank page is added before the tablets go there
 #   pm_differ <subann> <mainann> <mapfile> <sublist>
 #                                 ann_list outputs of both notebooks: the sub id8s in sublist
 #                                 whose strokes (.rm md5) differ between the tablets. A .rm
@@ -241,4 +243,8 @@ pm_del_ok() {
     [ "$1" -gt 0 ] || return 0
     [ $(($2 - $1 + $3)) -ge 1 ] || return 1
     [ "$1" -le 10 ] || [ $((2 * $1)) -le "$2" ]
+}
+
+pm_spread_short() {
+    [ $((2 * $2 + 1)) = "$1" ]
 }

@@ -29,6 +29,12 @@ if [ "$(id -u)" != 0 ]; then
 fi
 chmod 644 "$T/x/doc1/bbbbbbbb-2222.rm"
 
+# ---- Quick sheets: a top-level notebook of that name only
+quick_sheets notebook "Quick sheets"; check "quick sheets: top level" "$?" 0
+quick_sheets notebook "Work$US""Quick sheets"; check "quick sheets: in a folder is a notebook" "$?" 1
+quick_sheets pdf "Quick sheets"; check "quick sheets: a PDF of that name" "$?" 1
+quick_sheets notebook "Quick sheets 2"; check "quick sheets: another name" "$?" 1
+
 # ---- ann_plan: the newer file wins, but a blank .rm (under 512 bytes) never replaces strokes
 MAPF=$T/map; printf 'doc S M\nsaaaaaaa maaaaaaa\nsbbbbbbb mbbbbbbb\nsccccccc mccccccc\n' > "$MAPF"
 printf 'P saaaaaaa-1 -\nP sbbbbbbb-1 -\nP sccccccc-1 -\nF rm saaaaaaa-1 100 s1 4000\nF rm sbbbbbbb-1 300 s2 409\nF rm sccccccc-1 100 s3 4000\n' > "$T/as"

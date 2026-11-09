@@ -43,6 +43,12 @@ doc_type() { # uuid -> notebook | pdf | epub
     echo "${t:-notebook}"
 }
 
+quick_sheets() { # ft path -> 0 for xochitl's Quick sheets: a notebook of that name at the top
+                 # level (nothing in its files marks it). It stays per tablet: never paired.
+    case "$1" in pdf|epub) return 1 ;; esac
+    [ "$2" = "Quick sheets" ]
+}
+
 doc_path() { # uuid -> folder names (root first) + document name, joined by \037
     [ -f "$XD/$1.metadata" ] || return 1
     getkey "$XD/$1.metadata" visibleName; c=$KEYVAL
