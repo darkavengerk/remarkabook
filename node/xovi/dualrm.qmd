@@ -716,11 +716,12 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 }
                 const template = doc.templateForPage(have - 1);
                 const paperSize = DeviceScreenInfo.paperSize;
+                const docArg = typeof Library.createCollectionWrapper !== "function" ? doc.id : doc;
                 addingPage = true;
                 for (let i = 0; i < n - 1; i++) {
-                    DocumentController.addPageWithTemplateAndPageSize(doc, -1, template, paperSize);
+                    DocumentController.addPageWithTemplateAndPageSize(docArg, -1, template, paperSize);
                 }
-                DocumentController.addPageWithTemplateAndPageSize(doc, -1, template, paperSize, function() {
+                DocumentController.addPageWithTemplateAndPageSize(docArg, -1, template, paperSize, function() {
                     addingPage = false;
                     if (target >= 0) {
                         openPage(Math.min(target, have + n - 1));
