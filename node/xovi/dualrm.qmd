@@ -678,17 +678,16 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
             // move, add and delete pages (DocumentController is in scope here). 3.29 takes document
             // ids; 3.23 (which still has Library.createCollectionWrapper) takes the entries for
             // movePages and the document for addPageWithTemplateAndPageSize / deletePages, as
-            // its stock calls do.
+            // its stock calls do. Bare names (document, addingPage, openPage): on 3.29 "documentView" here is MainView's Loader.
             function dualrmMovePage(from, to) {
-                const doc = documentView.document;
+                const doc = document;
                 if (typeof Library.createCollectionWrapper !== "function") {
                     return DocumentController.movePages(doc.id, [from], doc.id, to, () => {});
                 }
                 const e = Library.entryForId(doc.id);
                 return DocumentController.movePages(e, [from], e, to, () => {});
             }
-            // add / delete pages without moving the view (the stock addPage opens the new page).
-            // Unqualified "document": on 3.29 "documentView" here is MainView's Loader.
+            // add / delete pages without moving the view (the stock addPage opens the new page)
             function dualrmAddPage(index, template, done) {
                 const doc = document;
                 const tpl = template !== "" ? template : doc.templateForPage(Math.max(0, index - 1));
@@ -703,7 +702,7 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 DocumentController.deletePages(target, pages, function() { done(); });
             }
             function dualrmEnsurePages(count, target) {
-                const doc = documentView.document;
+                const doc = document;
                 if (!doc) {
                     return -1;
                 }
@@ -711,20 +710,20 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 const n = Math.min(count - have, 500);
                 if (n <= 0) {
                     if (target >= 0) {
-                        documentView.openPage(Math.min(target, have - 1));
+                        openPage(Math.min(target, have - 1));
                     }
                     return have;
                 }
                 const template = doc.templateForPage(have - 1);
                 const paperSize = DeviceScreenInfo.paperSize;
-                documentView.addingPage = true;
+                addingPage = true;
                 for (let i = 0; i < n - 1; i++) {
                     DocumentController.addPageWithTemplateAndPageSize(doc, -1, template, paperSize);
                 }
                 DocumentController.addPageWithTemplateAndPageSize(doc, -1, template, paperSize, function() {
-                    documentView.addingPage = false;
+                    addingPage = false;
                     if (target >= 0) {
-                        documentView.openPage(Math.min(target, have + n - 1));
+                        openPage(Math.min(target, have + n - 1));
                     }
                 });
                 return have + n;
