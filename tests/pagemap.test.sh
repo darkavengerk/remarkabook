@@ -116,7 +116,8 @@ pm_del_ok 6 12 0; check "del ok: 6 of 12" "$?" 0
 pm_del_ok 10 12 0; check "del ok: 10 of 12 (not more than 10)" "$?" 0
 pm_del_ok 11 30 0; check "del ok: 11 of 30 (not more than half)" "$?" 0
 pm_del_ok 11 20 0; check "del refused: 11 of 20" "$?" 1
-pm_del_ok 1 2 0; check "del refused: 1 of 2 leaves 1" "$?" 1
-pm_del_ok 1 2 1; check "del ok: 1 of 2, a blank page added" "$?" 0
+pm_del_ok 1 2 0; check "del ok: 1 of 2 leaves 1 (padded after)" "$?" 0
+pm_del_ok 2 2 0; check "del refused: 2 of 2 leaves none" "$?" 1
+pm_del_ok 2 2 1; check "del ok: 2 of 2, a blank page added" "$?" 0
 
 [ $FAIL = 0 ] && echo PASS || { echo FAILED; exit 1; }

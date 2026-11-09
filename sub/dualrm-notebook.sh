@@ -328,6 +328,18 @@ nb_first_map() { # NBMAP holds only its doc line: how the pair's pages match
         # the same notebook on both tablets (a cloud copy): a page is its own partner; pages on
         # one tablet only get a blank partner (nb_sync), strokes go the newer way (ann_sync)
         pm_idmap "$PL_sub" "$PL_main" >> "$NBMAP"
+        nb_d=$(nb_differs "$PL_sub") || { rm -f "$NBMAP"; log "notebook '$NBNAME': strokes not compared: paired at the next opening"; return 1; }
+        if [ -n "$nb_d" ]; then
+            # the newer file wins, but a cloud download dates its files at the download: keep
+            # both versions before the first copy, so the user can check
+            nb_b=$D/merged/$(date +%Y%m%d-%H%M%S)
+            if ! nb_on sub notebook_copy "$BS" "$nb_b" || ! nb_on main notebook_copy "$BM" "$nb_b"; then
+                rm -f "$NBMAP"
+                log "notebook '$NBNAME': both versions not kept: not paired (tried again at the next opening)"
+                return 1
+            fi
+            log "notebook '$NBNAME': pages differ between the tablets: $nb_d (sub ids; the newer file wins); both versions kept in $nb_b on each tablet"
+        fi
         log "notebook '$NBNAME': the same notebook on both tablets: pages matched by id, not merged"
         return 0
     fi

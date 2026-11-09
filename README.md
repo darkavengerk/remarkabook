@@ -22,7 +22,9 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
   looks as before. Both originals are kept in `dualrm/merged/<date-time>/` on each tablet.
   The same notebook on both tablets (a reMarkable cloud copy, or the same pages with the same
   strokes on each) is not merged: its pages are matched as they are, and a page only one
-  tablet has gets a blank partner on the other.
+  tablet has gets a blank partner on the other. Where a page differs between the tablets the
+  newer file wins (a cloud download counts as new), so both versions are kept in
+  `dualrm/merged/<date-time>/` first and the sub's `sync.log` names the pages.
 - **Book mode** (PDF / EPUB present on both tablets, e.g. through the reMarkable cloud):
   one tablet shows the left page, the other the right page. A swipe or page key on either
   tablet turns the spread on both, in one step. Jumping to a page (page list, search, link)
@@ -257,7 +259,7 @@ systemctl disable --now dualrm-usbrole               # (either) USB-C back to de
   tablet (the other tablet then creates it again blank) rather than the map.
 - **`refusing to delete N of M pages on <tablet>`** in the sub's `sync.log`: pages deleted on
   one tablet are not deleted on the other when that would remove more than half of its pages
-  (and more than 10), or leave it fewer than 2 (a broken map must not empty a notebook). If the
+  (and more than 10), or all of them (a broken map must not empty a notebook). If the
   pages were deleted on purpose, delete the same pages on the tablet named (page overview).
 - **The UI misbehaves after an update**: run `/home/root/xovi/stock` on that tablet, then
   rebuild the hash table and re-run `install.sh`. If it still fails, that firmware is not
