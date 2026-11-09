@@ -5,15 +5,17 @@
 ;              SCROLL <uuid> <page> <top>   (notebook page scrolled: scene y at the top of the view,
 ;                                            reported once it settles; not after setscroll)
 ;              SLEEP / WAKE                 (this tablet goes to sleep / woke up)
-;              ADDED <uuid> <j1,j2,...>     (pages added: their positions in the new order; not
-;                                            for pages added by the addpage / ensure commands)
-;              ORDER <uuid> <i0,i1,...>     (pages moved, same pages: the page now at position j was
-;                                            at position i_j before)
+;              PAGES <uuid> <id8,id8,...>   (pages added, moved or deleted: the page list, first 8
+;                                            characters of each page id, once it settles; also
+;                                            after the commands below changed it)
 ;   command <- GET http://127.0.0.1:7782/next  answered with "<nonce> <command...>":
 ;     open <uuid>
 ;     close [<uuid>|-]        (close the open document; if uuid given, only when it matches)
 ;     status                  -> ok <openDocId|-> <pageCount> <currentPage>
-;     addpage [<index>]       (insert a page after the current one, or at <index>)
+;     pages                   -> ok <id8,id8,...> <template|template|...> of the open document
+;     addpage <index> [<template...>]  (a blank page at <index>, 0 = first; template of the page
+;                              before it unless given) -> ok <id8 of the new page>
+;     delpages <i,j,...>      (delete those pages; not all of them) -> ok <pageCount>
 ;     gotopage <index>
 ;     ensure <count> <target> (append blank pages up to <count> in one batch, max 500, then open <target>)
 ;     mkdir <parentUuid|-> <folder name...>
@@ -75,10 +77,9 @@ AFFECT /qml/device/view/main/MainView.qml
                         ev("PAGE " + String(d.id) + " " + d.pageCount + " " + documentView.item.currentPage);
                     }
                 }
-                // ---- page order: moves on one tablet are repeated on the other (ORDER / reorder)
+                // ---- page list: PAGES reports, reorder command
                 property var pageIdList: []     // page ids of the open document, in order
-                property bool reordering: false // applying a reorder: no ORDER / PAGE reports
-                property bool addQuiet: false   // pages added by a command: no ADDED report
+                property bool reordering: false // applying a reorder: no PAGES / PAGE reports
                 property var orderTarget: []
                 property string orderWaitId: ""
                 property int orderWaitAt: -1
@@ -98,31 +99,9 @@ AFFECT /qml/device/view/main/MainView.qml
                     return a;
                 }
                 function pageMapChanged() {
-                    const now = pageIds();
-                    const old = pageIdList;
-                    // pages added or removed: reportAdded() compares once the count settles
-                    if (now.length !== old.length) {
-                        return;
-                    }
-                    pageIdList = now;
-                    if (reordering || now.length < 2) {
-                        return;
-                    }
-                    const pos = {};
-                    for (let i = 0; i < old.length; i++) {
-                        pos[old[i]] = i;
-                    }
-                    const perm = [];
-                    let moved = false;
-                    for (let j = 0; j < now.length; j++) {
-                        if (pos[now[j]] === undefined) {
-                            return;
-                        }
-                        perm.push(pos[now[j]]);
-                        moved = moved || pos[now[j]] !== j;
-                    }
-                    if (moved) {
-                        ev("ORDER " + String(documentView.item.document.id) + " " + perm.join(","));
+                    if (!reordering) {
+                        dualrmPageSettle.tries = 0;
+                        dualrmPageSettle.restart();
                     }
                 }
                 function movePage(from, to) {
@@ -169,8 +148,8 @@ AFFECT /qml/device/view/main/MainView.qml
                 function orderDone(result) {
                     dualrmOrderTimer.stop();
                     orderWaitId = "";
-                    pageIdList = pageIds();
                     reordering = false;
+                    emitPages();
                     if (orderPage >= 0 && documentView.item?.document) {
                         documentView.item.openPage(Math.min(orderPage, documentView.item.document.pageCount - 1));
                     }
@@ -183,32 +162,19 @@ AFFECT /qml/device/view/main/MainView.qml
                     onTriggered: dualrmPoller.orderStep()
                 }
 
-                // Where pages were added, from the page ids before and after (the current page is
-                // not reliable: adding from the page overview does not open the new page).
-                function reportAdded() {
+                // The page list (first 8 characters of each page id), when it changed since the
+                // last report. The sync compares it with its page map.
+                function emitPages() {
+                    const d = documentView.item?.document;
+                    if (!d || reordering) {
+                        return;
+                    }
                     const now = pageIds();
-                    const old = pageIdList;
+                    if (now.join(",") === pageIdList.join(",")) {
+                        return;
+                    }
                     pageIdList = now;
-                    if (addQuiet) {
-                        addQuiet = false;
-                        return;
-                    }
-                    if (now.length <= old.length || !documentView.item?.document) {
-                        return;
-                    }
-                    const had = {};
-                    for (let i = 0; i < old.length; i++) {
-                        had[old[i]] = true;
-                    }
-                    const at = [];
-                    for (let j = 0; j < now.length; j++) {
-                        if (!had[now[j]]) {
-                            at.push(j);
-                        }
-                    }
-                    if (at.length === now.length - old.length) {
-                        ev("ADDED " + String(documentView.item.document.id) + " " + at.join(","));
-                    }
+                    ev("PAGES " + String(d.id) + " " + now.map(i => i.substring(0, 8)).join(","));
                 }
                 function emitState() {
                     const d = documentView.item?.document;
@@ -244,9 +210,11 @@ AFFECT /qml/device/view/main/MainView.qml
                     }
                     function onPageMapChanged() { dualrmPoller.pageMapChanged(); }
                 }
-                // Adding a page changes the count first and opens the new page later (DocumentView's
-                // addPage callback, addingPage = true until then). One PAGE report with both, so the
-                // sync sees the current page = where the page was inserted, not the page before it.
+                // Pages added, moved or deleted: wait until the page list settles, then one PAGES
+                // report and one PAGE report. Adding a page changes the count first and opens the
+                // new page later (DocumentView's addPage callback, addingPage = true until then), so
+                // the PAGE report has both: the current page = where the page was inserted, not the
+                // page before it.
                 Timer {
                     id: dualrmPageSettle
                     property int tries: 0
@@ -257,7 +225,7 @@ AFFECT /qml/device/view/main/MainView.qml
                             restart();
                             return;
                         }
-                        dualrmPoller.reportAdded();
+                        dualrmPoller.emitPages();
                         dualrmPoller.emitPage();
                     }
                 }
@@ -342,6 +310,27 @@ AFFECT /qml/device/view/main/MainView.qml
                     lastAnswer = text;
                     ev("RESP " + nonce + " " + text, () => dualrmPoller.poll());
                 }
+                // addpage / delpages answer from xochitl's callback; one at a time (the next
+                // command is only fetched after an answer), so one pending nonce is enough
+                property string cbNonce: ""
+                function cbStart(nonce) {
+                    cbNonce = nonce;
+                    dualrmCbTimer.restart();
+                }
+                function cbDone(text) {
+                    if (cbNonce === "") {
+                        return;
+                    }
+                    const n = cbNonce;
+                    cbNonce = "";
+                    dualrmCbTimer.stop();
+                    respond(n, text);
+                }
+                Timer {
+                    id: dualrmCbTimer
+                    interval: 5000
+                    onTriggered: dualrmPoller.cbDone("error timeout")
+                }
 
                 function handle(line) {
                     const parts = line.split(" ");
@@ -380,17 +369,46 @@ AFFECT /qml/device/view/main/MainView.qml
                             return;
                         }
                         if (cmd === "addpage") {
-                            const open = documentView.item?.document;
-                            if (!open) {
+                            const d = documentView.item?.document;
+                            if (!d) {
                                 respond(nonce, "error no-document");
                                 return;
                             }
-                            // the stock addPage reads index 0 as "after the current page": the
-                            // first place reachable is 1 (the page overview only adds after a page)
-                            const idx = parts.length > 2 ? Math.max(1, parseInt(parts[2])) : undefined;
-                            addQuiet = true;
-                            documentView.item.addPage(open, idx);
-                            respond(nonce, "ok " + open.pageCount);
+                            const idx = parseInt(parts[2]);
+                            if (!(idx >= 0 && idx <= d.pageCount)) {
+                                respond(nonce, "error bad-index " + parts[2]);
+                                return;
+                            }
+                            cbStart(nonce);
+                            documentView.item.dualrmAddPage(idx, parts.slice(3).join(" "), id8 => cbDone("ok " + id8));
+                            return;
+                        }
+                        if (cmd === "delpages") {
+                            const d = documentView.item?.document;
+                            if (!d) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            const list = (parts[2] || "").split(",").map(Number);
+                            if (list.length >= d.pageCount || list.some(i => !(i >= 0 && i < d.pageCount))) {
+                                respond(nonce, "error bad-pages " + parts[2]);
+                                return;
+                            }
+                            cbStart(nonce);
+                            documentView.item.dualrmDeletePages(list, () => cbDone("ok " + documentView.item.document.pageCount));
+                            return;
+                        }
+                        if (cmd === "pages") {
+                            const d = documentView.item?.document;
+                            if (!d) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            const t = [];
+                            for (let i = 0; i < d.pageCount; i++) {
+                                t.push(String(d.templateForPage(i)));
+                            }
+                            respond(nonce, "ok " + pageIds().map(i => i.substring(0, 8)).join(",") + " " + t.join("|"));
                             return;
                         }
                         if (cmd === "ensure") {
@@ -399,7 +417,6 @@ AFFECT /qml/device/view/main/MainView.qml
                                 respond(nonce, "error no-document");
                                 return;
                             }
-                            addQuiet = documentView.item.document.pageCount < parseInt(parts[2]);
                             const total = documentView.item.dualrmEnsurePages(parseInt(parts[2]), parseInt(parts[3]));
                             respond(nonce, "ok " + total);
                             return;
@@ -521,7 +538,7 @@ AFFECT /qml/device/view/main/MainView.qml
     END TRAVERSE
 END AFFECT
 
-; Batched page append, pen settings, notebook scrolling and book-mode page turns inside DocumentView (DocumentController, DeviceScreenInfo
+; Batched page append, page add / delete / move, pen settings, notebook scrolling and book-mode page turns inside DocumentView (DocumentController, DeviceScreenInfo
 ; and the DocumentToolSettings documentViewTools are in scope there).
 AFFECT /qml/device/view/documentview/DocumentView.qml
     TRAVERSE FocusScope
@@ -658,8 +675,10 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 return Math.max(1, Math.abs(t - currentPage));
             }
 
-            // move one page (DocumentController is in scope here); 3.29 takes document ids, 3.23
-            // (which still has Library.createCollectionWrapper) takes the entries
+            // move, add and delete pages (DocumentController is in scope here). 3.29 takes document
+            // ids; 3.23 (which still has Library.createCollectionWrapper) takes the entries for
+            // movePages and the document for addPageWithTemplateAndPageSize / deletePages, as
+            // its stock calls do.
             function dualrmMovePage(from, to) {
                 const doc = documentView.document;
                 if (typeof Library.createCollectionWrapper !== "function") {
@@ -667,6 +686,21 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 }
                 const e = Library.entryForId(doc.id);
                 return DocumentController.movePages(e, [from], e, to, () => {});
+            }
+            // add / delete pages without moving the view (the stock addPage opens the new page).
+            // Unqualified "document": on 3.29 "documentView" here is MainView's Loader.
+            function dualrmAddPage(index, template, done) {
+                const doc = document;
+                const tpl = template !== "" ? template : doc.templateForPage(Math.max(0, index - 1));
+                const target = typeof Library.createCollectionWrapper !== "function" ? doc.id : doc;
+                DocumentController.addPageWithTemplateAndPageSize(target, index, tpl, DeviceScreenInfo.paperSize, function() {
+                    done(String(doc.idForPage(index)).substring(0, 8));
+                });
+            }
+            function dualrmDeletePages(pages, done) {
+                const doc = document;
+                const target = typeof Library.createCollectionWrapper !== "function" ? doc.id : doc;
+                DocumentController.deletePages(target, pages, function() { done(); });
             }
             function dualrmEnsurePages(count, target) {
                 const doc = documentView.document;
