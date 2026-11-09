@@ -276,27 +276,7 @@ ann_sync() ( # sub-doc main-doc both|tomain|tosub [pagemap]: copy the newer anno
     ann_list "$s" > "$T/s"
     mssh ". $D/dualrm-lib.sh; ann_list $m" > "$T/m" || { rm -rf "$T"; exit 1; }
     same=0; [ "$s" = "$m" ] && same=1
-    # pages are matched by page id (same document), by PDF page (a copy) or through the page map
-    # (a shared notebook)
-    awk -v same=$same -v dir="$3" -v mapf="$4" '
-        BEGIN { if (mapf != "") while ((getline l < mapf) > 0) { split(l, w, " "); if (w[1] != "doc") MS[w[2]] = w[1] } }
-        { side = (FILENAME == ARGV[1]) ? 1 : 2 }
-        $1 == "P" {
-            if (mapf != "") { if ($3 == "x") next; k = substr($2, 1, 8); if (side == 2) k = MS[k]; if (k == "") next }
-            else { k = same ? $2 : $3; if (k == "-" || k == "x") next }
-            ID[side, k] = $2; K[side, $2] = k; next }
-        $1 == "F" { k = K[side, $3]; if (k == "") next; T[side, $2, k] = $4; H[side, $2, k] = $5; ALL[$2 " " k] = 1 }
-        END {
-            for (tk in ALL) {
-                split(tk, a, " "); t = a[1]; k = a[2]
-                hs = H[1, t, k]; hm = H[2, t, k]
-                if (hs == hm) continue
-                if (dir != "tosub" && hs != "" && (hm == "" || T[1, t, k] > T[2, t, k]) && ID[2, k] != "")
-                    print "tomain", t, ID[1, k], ID[2, k]
-                else if (dir != "tomain" && hm != "" && (hs == "" || T[2, t, k] > T[1, t, k]) && ID[1, k] != "")
-                    print "tosub", t, ID[2, k], ID[1, k]
-            }
-        }' "$T/s" "$T/m" > "$T/plan"
+    ann_plan "$T/s" "$T/m" "$3" $same "$4" > "$T/plan"     # a blank page's .rm never wins
     rel() { # doc kind page -> annotation file, and the page preview that goes with it
         if [ "$2" = hl ]; then echo "$1.highlights/$3.json"; else echo "$1/$3.rm $1.thumbnails/$3.png"; fi
     }

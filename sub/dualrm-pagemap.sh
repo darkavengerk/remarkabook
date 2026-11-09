@@ -44,7 +44,8 @@
 #   pm_sides <old> <new>          the pages whose side (left / right) changed
 #   pm_differ <subann> <mainann> <mapfile> <sublist>
 #                                 ann_list outputs of both notebooks: the sub id8s in sublist
-#                                 whose strokes (.rm md5) differ between the tablets
+#                                 whose strokes (.rm md5) differ between the tablets. A .rm
+#                                 under BLANK_RM (512) bytes (size: 6th field) is no strokes
 
 pm_plan() {
     [ -n "$1" ] && [ -n "$2" ] || return 1       # an empty list is a failed query, not "all deleted"
@@ -194,9 +195,9 @@ pm_spread_del() {
 }
 
 pm_differ() {
-    awk -v W="$4" '
+    awk -v W="$4" -v blank="${BLANK_RM:-512}" '
         FILENAME == ARGV[1] { if ($1 != "doc" && NF == 2) ms[$2] = $1; next }
-        $1 == "F" && $2 == "rm" {
+        $1 == "F" && $2 == "rm" && !($6 != "" && $6 + 0 < blank) {
             id = substr($3, 1, 8)
             if (FILENAME == ARGV[2]) hs[id] = $5
             else if (id in ms) hm[ms[id]] = $5

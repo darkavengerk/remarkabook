@@ -56,12 +56,15 @@ doc_path() { # uuid -> folder names (root first) + document name, joined by \037
     echo "$c"
 }
 
-find_child() { # parent type name -> uuid of a live entry with that name, or nothing
+find_child() { # parent type name -> uuid of a live entry with that name, or nothing. Type
+               # NotebookType: a DocumentType that is a notebook (not a PDF/EPUB of that name)
     cd "$XD" || return
+    _t=$2; [ "$_t" = NotebookType ] && _t=DocumentType
     grep -l -F "\"visibleName\": \"$3\"" *.metadata 2>/dev/null | while read -r f; do
-        getkey "$f" type; [ "$KEYVAL" = "$2" ] || continue
+        getkey "$f" type; [ "$KEYVAL" = "$_t" ] || continue
         getkey "$f" parent; [ "$KEYVAL" = "$1" ] || continue
         getkey "$f" deleted; [ "$KEYVAL" = true ] && continue
+        [ "$2" = NotebookType ] && [ "$(doc_type "${f%.metadata}")" != notebook ] && continue
         echo "${f%.metadata}"
         break
     done | head -n 1
@@ -165,13 +168,47 @@ page_map() { # doc -> "<page id> <pdf page|->" per page (.content format 1 or 2)
         }' "$XD/$1.content"
 }
 
-ann_list() { # doc -> "P <page id> <pdf page>" per page, then "F <rm|hl> <page id> <mtime> <md5>"
+ann_list() { # doc -> "P <page id> <pdf page>" per page, then
+              # "F <rm|hl> <page id> <mtime> <md5> <size>" per annotation file
     page_map "$1" | sed 's/^/P /'
     for _f in "$XD/$1"/*.rm "$XD/$1.highlights"/*.json; do
         [ -f "$_f" ] || continue
         _n=${_f##*/}; _k=rm; case "$_n" in *.json) _k=hl ;; esac
-        _m=$(md5sum "$_f"); echo "F $_k ${_n%.*} $(stat -c %Y "$_f") ${_m%% *}"
+        _m=$(md5sum "$_f"); echo "F $_k ${_n%.*} $(stat -c %Y "$_f") ${_m%% *} $(stat -c %s "$_f")"
     done
+}
+
+# A page's .rm under BLANK_RM bytes holds no strokes: xochitl writes one for a page it shows or
+# adds (409 bytes on 3.23, 424 on 3.29). It counts as no file: it is never copied over strokes
+# (it is often the newer file: a page the sync just added), and strokes are copied over it. The
+# price: a page erased completely on one tablet keeps its strokes on the other.
+BLANK_RM=512
+
+ann_plan() { # sub-list main-list both|tomain|tosub same [pagemap] (ann_list outputs, same: 1
+             # when both are the same document) -> "<tomain|tosub> <rm|hl> <from id> <to id>"
+             # per file to copy: the newer one wins. Pages are matched by page id (same
+             # document), by PDF page (a copy) or through the page map (a shared notebook)
+    awk -v same="$4" -v dir="$3" -v mapf="$5" -v blank=$BLANK_RM '
+        BEGIN { if (mapf != "") while ((getline l < mapf) > 0) { split(l, w, " "); if (w[1] != "doc") MS[w[2]] = w[1] } }
+        { side = (FILENAME == ARGV[1]) ? 1 : 2 }
+        $1 == "P" {
+            if (mapf != "") { if ($3 == "x") next; k = substr($2, 1, 8); if (side == 2) k = MS[k]; if (k == "") next }
+            else { k = same ? $2 : $3; if (k == "-" || k == "x") next }
+            ID[side, k] = $2; K[side, $2] = k; next }
+        $1 == "F" {
+            if ($2 == "rm" && $6 != "" && $6 + 0 < blank) next      # no strokes: as if no file
+            k = K[side, $3]; if (k == "") next; T[side, $2, k] = $4; H[side, $2, k] = $5; ALL[$2 " " k] = 1 }
+        END {
+            for (tk in ALL) {
+                split(tk, a, " "); t = a[1]; k = a[2]
+                hs = H[1, t, k]; hm = H[2, t, k]
+                if (hs == hm) continue
+                if (dir != "tosub" && hs != "" && (hm == "" || T[1, t, k] > T[2, t, k]) && ID[2, k] != "")
+                    print "tomain", t, ID[1, k], ID[2, k]
+                else if (dir != "tomain" && hm != "" && (hs == "" || T[2, t, k] > T[1, t, k]) && ID[1, k] != "")
+                    print "tosub", t, ID[2, k], ID[1, k]
+            }
+        }' "$1" "$2"
 }
 
 ann_place() { # staging dir laid out like $XD -> move its files into $XD, keeping a backup of
@@ -192,21 +229,23 @@ ann_place() { # staging dir laid out like $XD -> move its files into $XD, keepin
 }
 
 pages_blank() { # doc id8,... -> the id8s whose page has no strokes here: no .rm, or a .rm under
-                # 512 bytes (xochitl saves a page without strokes as 409 bytes on 3.23)
+                # BLANK_RM bytes
     for _i in $(echo "$2" | tr , ' '); do
         _f=$(ls "$XD/$1/$_i"*.rm 2>/dev/null | head -n 1)
-        if [ -z "$_f" ] || [ "$(stat -c %s "$_f")" -lt 512 ]; then echo "$_i"; fi
+        if [ -z "$_f" ] || [ "$(stat -c %s "$_f")" -lt "$BLANK_RM" ]; then echo "$_i"; fi
     done
 }
 
-page_backup() { # doc id8,... -> those pages' strokes into $D/backup/<time>/<doc>/ (before a delete)
-    _b=$D/backup/$(date +%Y%m%d-%H%M%S)/$1
+page_backup() { # doc id8,... -> those pages' strokes into $D/backup/<time>/<doc>/ (before a
+                # delete); 1 when a file could not be copied (then nothing may be deleted)
+    _b=$D/backup/$(date +%Y%m%d-%H%M%S)/$1; _rc=0
     for _i in $(echo "$2" | tr , ' '); do
         for _f in "$XD/$1/$_i"*.rm; do
-            [ -f "$_f" ] && mkdir -p "$_b" && cp -p "$_f" "$_b/"
+            [ -f "$_f" ] || continue
+            mkdir -p "$_b" && cp -p "$_f" "$_b/" || _rc=1
         done
     done
-    :
+    return $_rc
 }
 
 notebook_copy() { # doc dir -> all of the notebook's files into dir (kept before a merge)

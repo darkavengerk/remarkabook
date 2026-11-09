@@ -92,6 +92,13 @@ printf 'P s1aaaaaa-x - \nF rm s1aaaaaa-x 100 aaa\n' > "$T/s"
 printf 'P m1aaaaaa-x - \nP m2aaaaaa-x - \nF rm m2aaaaaa-x 100 ccc\n' > "$T/m"
 check "differ: .rm on one side only" "$(pm_differ "$T/s" "$T/m" "$MAP" s1aaaaaa,s2aaaaaa | lines)" "s1aaaaaa;s2aaaaaa"
 
+# a .rm under 512 bytes (6th field) holds no strokes: the same as no file
+printf 'P s1aaaaaa-x - \nP s2aaaaaa-x - \nF rm s1aaaaaa-x 100 aaa 409\nF rm s2aaaaaa-x 100 bbb 409\n' > "$T/s"
+printf 'P m1aaaaaa-x - \nP m2aaaaaa-x - \nF rm m2aaaaaa-x 100 ccc 424\n' > "$T/m"
+check "differ: blank vs none, blank vs blank: same" "$(pm_differ "$T/s" "$T/m" "$MAP" s1aaaaaa,s2aaaaaa)" ""
+printf 'P m1aaaaaa-x - \nP m2aaaaaa-x - \nF rm m1aaaaaa-x 100 ccc 4000\nF rm m2aaaaaa-x 100 ccc 424\n' > "$T/m"
+check "differ: blank vs strokes" "$(pm_differ "$T/s" "$T/m" "$MAP" s1aaaaaa,s2aaaaaa)" "s1aaaaaa"
+
 # ---- pm_sides
 check "sides: moved to the front" "$(pm_sides a,b,c,d c,a,b,d)" "a,b"
 check "sides: spread moved" "$(pm_sides a,b,c,d c,d,a,b)" ""
