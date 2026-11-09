@@ -5,6 +5,8 @@
 ;              SCROLL <uuid> <page> <top>   (notebook page scrolled: scene y at the top of the view,
 ;                                            reported once it settles; not after setscroll)
 ;              SLEEP / WAKE                 (this tablet goes to sleep / woke up)
+;              ORDER <uuid> <i0,i1,...>     (pages moved, same pages: the page now at position j was
+;                                            at position i_j before)
 ;   command <- GET http://127.0.0.1:7782/next  answered with "<nonce> <command...>":
 ;     open <uuid>
 ;     close [<uuid>|-]        (close the open document; if uuid given, only when it matches)
@@ -21,6 +23,8 @@
 ;     setscroll <page> <top>  (notebook pages only: scroll so scene y <top> is at the top of the view)
 ;     pagestep <n>            (a page turn by hand moves n pages: 2 in book mode; back to 1 when
 ;                              another document opens or the tablet wakes up)
+;     reorder <i0,i1,...> <page>  (move pages so the page at position i_j comes to position j,
+;                              pages after the list stay; then open <page>; answered when done)
 ;     link <usb|wifi|->       (linked to the other tablet over USB / WiFi: show it in the status
 ;                              tray of the library; "-": hide it, page turns step one page again)
 ;   answer  -> GET http://127.0.0.1:7781/ev?RESP <nonce> ok ... | error ...
@@ -65,10 +69,121 @@ AFFECT /qml/device/view/main/MainView.qml
 
                 function emitPage() {
                     const d = documentView.item?.document;
-                    if (d) {
+                    if (d && !reordering) {
                         ev("PAGE " + String(d.id) + " " + d.pageCount + " " + documentView.item.currentPage);
                     }
                 }
+                // ---- page order: moves on one tablet are repeated on the other (ORDER / reorder)
+                property var pageIdList: []     // page ids of the open document, in order
+                property bool reordering: false // applying a reorder: no ORDER / PAGE reports
+                property var orderTarget: []
+                property string orderWaitId: ""
+                property int orderWaitAt: -1
+                property int orderTries: 0
+                property string orderNonce: ""
+                property int orderPage: -1
+
+                function pageIds() {
+                    const d = documentView.item?.document;
+                    const a = [];
+                    if (!d) {
+                        return a;
+                    }
+                    for (let i = 0; i < d.pageCount; i++) {
+                        a.push(String(d.idForPage(i)));
+                    }
+                    return a;
+                }
+                function pageMapChanged() {
+                    const now = pageIds();
+                    const old = pageIdList;
+                    pageIdList = now;
+                    // pages added or removed: the PAGE report covers that
+                    if (reordering || now.length !== old.length || now.length < 2) {
+                        return;
+                    }
+                    const pos = {};
+                    for (let i = 0; i < old.length; i++) {
+                        pos[old[i]] = i;
+                    }
+                    const perm = [];
+                    let moved = false;
+                    for (let j = 0; j < now.length; j++) {
+                        if (pos[now[j]] === undefined) {
+                            return;
+                        }
+                        perm.push(pos[now[j]]);
+                        moved = moved || pos[now[j]] !== j;
+                    }
+                    if (moved) {
+                        ev("ORDER " + String(documentView.item.document.id) + " " + perm.join(","));
+                    }
+                }
+                // move one page; 3.29 takes document ids, 3.23 (which still has
+                // Library.createCollectionWrapper) takes the entries
+                function movePage(from, to) {
+                    const d = documentView.item.document;
+                    if (typeof Library.createCollectionWrapper !== "function") {
+                        return DocumentController.movePages(d.id, [from], d.id, to, () => {});
+                    }
+                    const e = Library.entryForId(d.id);
+                    return DocumentController.movePages(e, [from], e, to, () => {});
+                }
+                // Always move the first page that is out of place forward into its place: moving a
+                // page towards the front gives the same result whichever way the insert index is
+                // counted. Each move is confirmed in the page map before the next one.
+                function orderStep() {
+                    const cur = pageIds();
+                    if (orderWaitId !== "") {
+                        if (cur[orderWaitAt] !== orderWaitId) {
+                            if (++orderTries > 40) {
+                                orderDone("error move-timeout");
+                            } else {
+                                dualrmOrderTimer.restart();
+                            }
+                            return;
+                        }
+                        orderWaitId = "";
+                    }
+                    let j = 0;
+                    while (j < cur.length && j < orderTarget.length && cur[j] === orderTarget[j]) {
+                        j++;
+                    }
+                    if (j >= cur.length || j >= orderTarget.length) {
+                        orderDone("ok");
+                        return;
+                    }
+                    const k = cur.indexOf(orderTarget[j]);
+                    if (k <= j) {
+                        orderDone("error bad-order");
+                        return;
+                    }
+                    orderWaitId = orderTarget[j];
+                    orderWaitAt = j;
+                    orderTries = 0;
+                    if (!movePage(k, j)) {
+                        orderDone("error move-refused");
+                        return;
+                    }
+                    dualrmOrderTimer.restart();
+                }
+                function orderDone(result) {
+                    dualrmOrderTimer.stop();
+                    orderWaitId = "";
+                    pageIdList = pageIds();
+                    reordering = false;
+                    if (orderPage >= 0 && documentView.item?.document) {
+                        documentView.item.openPage(Math.min(orderPage, documentView.item.document.pageCount - 1));
+                    }
+                    emitPage();
+                    respond(orderNonce, result);
+                }
+                Timer {
+                    id: dualrmOrderTimer
+                    interval: 150
+                    onTriggered: dualrmPoller.orderStep()
+                }
+
                 function emitState() {
                     const d = documentView.item?.document;
                     if (!d) {
@@ -84,6 +199,7 @@ AFFECT /qml/device/view/main/MainView.qml
                     ignoreUnknownSignals: true
                     function onDocumentChanged() {
                         documentView.item.dualrmPageStep = 1;
+                        dualrmPoller.pageIdList = dualrmPoller.pageIds();
                         dualrmPoller.emitState();
                     }
                     // a page added on the way (dualrmPageSettle running) is reported once it settles
@@ -100,6 +216,7 @@ AFFECT /qml/device/view/main/MainView.qml
                         dualrmPageSettle.tries = 0;
                         dualrmPageSettle.restart();
                     }
+                    function onPageMapChanged() { dualrmPoller.pageMapChanged(); }
                 }
                 // Adding a page changes the count first and opens the new page later (DocumentView's
                 // addPage callback, addingPage = true until then). One PAGE report with both, so the
@@ -307,6 +424,31 @@ AFFECT /qml/device/view/main/MainView.qml
                             }
                             documentView.item.dualrmPageStep = Math.max(1, parseInt(parts[2]) || 1);
                             respond(nonce, "ok " + documentView.item.dualrmPageStep);
+                            return;
+                        }
+                        if (cmd === "reorder") {
+                            const open = documentView.item?.document;
+                            if (!open) {
+                                respond(nonce, "error no-document");
+                                return;
+                            }
+                            if (reordering) {
+                                respond(nonce, "error busy");
+                                return;
+                            }
+                            const perm = (parts[2] || "").split(",").map(Number);
+                            const cur = pageIds();
+                            if (perm.length < 2 || perm.length > cur.length
+                                    || perm.some(i => !(i >= 0 && i < perm.length))) {
+                                respond(nonce, "error bad-order " + perm.length + "/" + cur.length);
+                                return;
+                            }
+                            orderTarget = perm.map(i => cur[i]).concat(cur.slice(perm.length));
+                            orderNonce = nonce;
+                            orderPage = parts.length > 3 ? parseInt(parts[3]) : -1;
+                            orderWaitId = "";
+                            reordering = true;
+                            orderStep();     // answers when the order is in place
                             return;
                         }
                         if (cmd === "link") {

@@ -11,7 +11,9 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
 
 - **Notebooks**: the other tablet opens the notebook with the same name in the same folder
   (folders and a blank notebook are created if missing) and keeps the same page count and
-  page. Each tablet keeps its own strokes: notebook content is not copied.
+  page. A page added in the middle, or pages moved in the page overview, are added / moved at
+  the same place on the other tablet. Each tablet keeps its own strokes: notebook content is
+  not copied.
 - **Book mode** (PDF / EPUB present on both tablets, e.g. through the reMarkable cloud):
   one tablet shows the left page, the other the right page. A swipe or page key on either
   tablet turns the spread on both, in one step. Jumping to a page (page list, search, link)
@@ -49,6 +51,7 @@ issues; include `cat /etc/os-release` and the sub's `sync.log`.
 |---|---|
 | Open / close follows, both ways | works |
 | Notebook page count / current page, both ways | works (pages are added, never deleted) |
+| Page added in the middle / pages moved in the page overview, both ways | new, not yet tested on the tablets |
 | Notebook scroll position, both ways | works |
 | Book mode for PDFs on both tablets | works |
 | Book mode page turn in one step | new, not yet tested on the tablets |

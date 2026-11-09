@@ -12,7 +12,8 @@
 #
 # Pairing rules
 #   notebook          -> same folder path + name on the other tablet (created if missing),
-#                        same page count (pages are added, never deleted), same page
+#                        same page count (pages are added, never deleted), same page; a page
+#                        added in the middle or pages moved are added / moved at the same place
 #   pdf/epub present on both (same document id, e.g. via reMarkable cloud)
 #                     -> book mode: one tablet shows the left page, the other the right page
 #   pdf/epub missing on the other tablet
@@ -477,6 +478,17 @@ on_page() { # side uuid pagecount currentpage
     pages_sync "$x" "$q" "$qc"
 }
 
+# Pages moved on one tablet (page overview: Move) are moved the same way on the other: the patch
+# reports the new order as positions of the old one ("2,0,1": the old third page is now first),
+# which maps onto the other tablet's pages by position (each tablet has its own page ids).
+on_order() { # side uuid perm
+    x=$1; [ "$2" = "$(get DOC "$x")" ] || return
+    [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
+    y=$(other "$x"); cp=$(get CP "$x")
+    now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
+    req "$y" reorder "$3" "$cp" >/dev/null && log "$y: pages moved like on $x ($3)"
+}
+
 # ---------------------------------------------------------------- notebook scrolling
 # A notebook page scrolled on one tablet is scrolled to the same place on the other (mirror
 # mode only: PDF/EPUB pages are not followed). A tablet we just opened, paged or scrolled
@@ -591,6 +603,9 @@ while :; do
         SCROLL\ *)
             set -f; set -- $body; set +f
             on_scroll "$side" "$2" "$3" "$4" ;;
+        ORDER\ *)
+            set -f; set -- $body; set +f
+            on_order "$side" "$2" "$3" ;;
         SLEEP) on_sleep "$side" ;;
         WAKE) on_wake "$side" ;;
         LINKUP\ *)
