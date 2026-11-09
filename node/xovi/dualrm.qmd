@@ -119,15 +119,8 @@ AFFECT /qml/device/view/main/MainView.qml
                         ev("ORDER " + String(documentView.item.document.id) + " " + perm.join(","));
                     }
                 }
-                // move one page; 3.29 takes document ids, 3.23 (which still has
-                // Library.createCollectionWrapper) takes the entries
                 function movePage(from, to) {
-                    const d = documentView.item.document;
-                    if (typeof Library.createCollectionWrapper !== "function") {
-                        return DocumentController.movePages(d.id, [from], d.id, to, () => {});
-                    }
-                    const e = Library.entryForId(d.id);
-                    return DocumentController.movePages(e, [from], e, to, () => {});
+                    return documentView.item.dualrmMovePage(from, to);
                 }
                 // Always move the first page that is out of place forward into its place: moving a
                 // page towards the front gives the same result whichever way the insert index is
@@ -627,6 +620,16 @@ AFFECT /qml/device/view/documentview/DocumentView.qml
                 return Math.max(1, Math.abs(t - currentPage));
             }
 
+            // move one page (DocumentController is in scope here); 3.29 takes document ids, 3.23
+            // (which still has Library.createCollectionWrapper) takes the entries
+            function dualrmMovePage(from, to) {
+                const doc = documentView.document;
+                if (typeof Library.createCollectionWrapper !== "function") {
+                    return DocumentController.movePages(doc.id, [from], doc.id, to, () => {});
+                }
+                const e = Library.entryForId(doc.id);
+                return DocumentController.movePages(e, [from], e, to, () => {});
+            }
             function dualrmEnsurePages(count, target) {
                 const doc = documentView.document;
                 if (!doc) {
