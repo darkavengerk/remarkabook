@@ -87,13 +87,31 @@ nb_mapok() { # does the map belong to the pair BS / BM?
     [ "$(sed -n '1s/^doc //p' "$NBMAP" 2>/dev/null)" = "$BS $BM" ]
 }
 
+nb_pairs() { # the pairs of all maps, the most recently used first: "<sub id> <main id>"
+    ls -t "$D/pagemap" 2>/dev/null | while read -r nb_f; do
+        case "$nb_f" in *.*) continue ;; esac     # .old, .tmp
+        sed -n '1s/^doc //p' "$D/pagemap/$nb_f"
+    done
+}
+
+nb_partners() { # side doc [not] -> doc's partners in the maps (other than not), newest first
+    nb_pairs | awk -v x="$1" -v u="$2" -v n="$3" \
+        '(x == "sub" && $1 == u && $2 != n) { print $2 } (x == "main" && $2 == u && $1 != n) { print $1 }'
+}
+
 nb_partner() { # side doc -> its partner on the other tablet from an earlier pairing, still there
-    nb_c=$(for nb_f in "$D"/pagemap/*; do
-            case "${nb_f##*/}" in *.*) continue ;; esac     # .old, .tmp
-            sed -n '1s/^doc //p' "$nb_f"
-        done | awk -v x="$1" -v u="$2" '(x == "sub" && $1 == u) { c = $2 } (x == "main" && $2 == u) { c = $1 }
-            END { print c }')
-    [ -n "$nb_c" ] && has_on "$(other "$1")" "$nb_c" && echo "$nb_c"
+    for nb_c in $(nb_partners "$1" "$2"); do
+        has_on "$(other "$1")" "$nb_c" && { echo "$nb_c"; return 0; }
+    done
+    return 1
+}
+
+nb_taken() { # side doc partner -> the notebook doc is paired with instead of partner, if it is
+             # still there (a second notebook of the same name must not be merged into doc)
+    for nb_c in $(nb_partners "$1" "$2" "$3"); do
+        has_on "$(other "$1")" "$nb_c" && { echo "$nb_c"; return 0; }
+    done
+    return 1
 }
 
 nb_mapline() { # side new-id8 partner-id8: the page just added on side is partner's page
@@ -282,6 +300,12 @@ nb_ready() { # the pair is open on both: same pages (merge the first time), then
     nb_lists || return 1
     NBMAP=$D/pagemap/$BS
     if ! nb_mapok; then
+        # one of them paired with another notebook that is still there: never merge (it would
+        # take that one's pages along, and again at each switch)
+        if nb_o=$(nb_taken sub "$BS" "$BM") || nb_o=$(nb_taken main "$BM" "$BS"); then
+            log "notebook '$NBNAME': already paired with $nb_o, not with this one (rename one of them)"
+            MODE=""; NB=0; return 1
+        fi
         [ -f "$NBMAP" ] && mv "$NBMAP" "$NBMAP.old"
         echo "doc $BS $BM" > "$NBMAP"
         if [ -f "$D/created.$BS" ] || [ -f "$D/created.$BM" ]; then
@@ -360,8 +384,9 @@ nb_follow() { # (on_pages: x, old = PL_x) x reported other pages: read them, app
     added=$(nb_diff "$new" "$old"); gone=$(nb_diff "$old" "$new")
     # spread rules only for pages the user added or deleted alone: a reorder, or adds and
     # deletes together, are only followed. Pages the sync added are in PL already: not "added".
-    if [ -n "$added" ] && [ -z "$gone" ]; then nb_spread_add "$x" "$old" "$new" || return 1
-    elif [ -n "$gone" ] && [ -z "$added" ]; then nb_spread_del "$x" "$old" "$new" || return 1
+    # stopped part-way: x's pages are not what PL says, the next report reconciles afresh
+    if [ -n "$added" ] && [ -z "$gone" ]; then nb_spread_add "$x" "$old" "$new" || { NB_DIRTY=1; return 1; }
+    elif [ -n "$gone" ] && [ -z "$added" ]; then nb_spread_del "$x" "$old" "$new" || { NB_DIRTY=1; return 1; }
     fi
     return 0
 }

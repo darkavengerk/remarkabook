@@ -419,8 +419,13 @@ on_doc() { # side uuid ft path
             else target=$(mirror_path "$y" "$4") && MODE=lazy
             fi ;;
         *)
-            # its partner from an earlier pairing (renamed or moved since), else by name
-            target=$(nb_partner "$x" "$u") || target=$(mirror_path "$y" "$4")
+            # its partner from an earlier pairing (renamed or moved since), else by name: not
+            # one paired with another notebook (two of that name in one folder here)
+            if target=$(nb_partner "$x" "$u"); then :
+            elif target=$(mirror_path "$y" "$4") && nb_taken "$y" "$target" "$u" >/dev/null; then
+                log "notebook '${4##*"$US"}': the other tablet's notebook of that name is already paired with another one (rename one of them)"
+                MODE=""; PENDING=""; return
+            fi
             [ -n "$target" ] && MODE=book && NB=1 && COVER=0 ;;
     esac
     if [ -z "$target" ]; then log "no counterpart on $y for '$(echo "$4" | tr "$US" /)'"; MODE=""; return; fi
@@ -448,6 +453,7 @@ on_doc() { # side uuid ft path
 pair_ready() { # the pair is open on both: line them up (a notebook's pages first)
     if [ "$NB" = 1 ]; then
         nb_ready || log "notebook: pages not in step (see above)"
+        [ -n "$MODE" ] || return          # not a pair after all (nb_ready refused it)
         nb_mapok && BMAP=$NBMAP
         [ -n "$PENDING" ] && return       # a refresh reopens both: lined up when that is done
         nb_where "$LEAD"                  # pages moved under the leader's last report
