@@ -323,10 +323,23 @@ ann_locked() { # command...: one annotation copy at a time
 BS=""; BM=""    # the book-mode pair: sub's document, main's document
 BMAP=""         # a shared notebook's page map for ann_sync ("-": none yet, copy nothing)
 COVER=0         # the pair's cover page: BOOK_COVER for PDF/EPUB, 0 for notebooks
-book_end() { # book mode is over: copy annotations both ways once both have saved (a notebook
-             # through its map, never without one)
-    [ -n "$BS" ] && [ "$LINK" = 1 ] && [ "$BMAP" != - ] && ( sleep 3; ann_locked ann_sync "$BS" "$BM" both $BMAP ) &
+BCOPY=""; BCOPYT=0  # a copy at close waiting: "<sub doc> <main doc> [map]", and from when on
+book_end() { # book mode is over: copy annotations both ways once both have saved (3 s, the main
+             # loop calls book_copy); a notebook through its map, never without one
+    [ -n "$BCOPY" ] && book_copy        # an earlier one still waiting: now
+    if [ -n "$BS" ] && [ "$LINK" = 1 ] && [ "$BMAP" != - ]; then
+        now; BCOPY="$BS $BM $BMAP"; BCOPYT=$((NOW + 3))
+    fi
     BS=""; BM=""; BMAP=""; NB=0
+}
+
+book_copy() { # the waiting copy at close, unless either document is open again (it would write
+              # into an open document; the next open or close copies instead)
+    set -f; set -- $BCOPY; set +f; BCOPY=""
+    [ "$LINK" = 1 ] || return
+    _o=$(req sub status) && [ "${_o%% *}" != "$1" ] || return
+    _o=$(req main status) && [ "${_o%% *}" != "$2" ] || return
+    ( ann_locked ann_sync "$1" "$2" both $3 ) &
 }
 
 goto() { # side page: show page on side unless it is there already
@@ -416,7 +429,7 @@ on_doc() { # side uuid ft path
         pdf|epub)
             target=$(pair_of "$x" "$u" "$3" "$4") || target=$(copy_doc "$x" "$u" "$3" "$4")
             if [ -n "$target" ]; then MODE=book
-            else target=$(mirror_path "$y" "$4") && MODE=lazy
+            else target=$(mirror_path "$y" "$4") && MODE=lazy && rm -f "$D/created.$target"
             fi ;;
         *)
             # its partner from an earlier pairing (renamed or moved since), else by name: not
@@ -582,9 +595,10 @@ CLOSING_FROM=""
 local_request link - >/dev/null   # no link yet (an indicator may be left from a killed sync)
 local_request emit >/dev/null
 while :; do
-    if [ -n "$CLOSING_FROM" ]; then
+    [ -n "$BCOPY" ] && { now; [ "$NOW" -ge "$BCOPYT" ] && book_copy; }
+    if [ -n "$CLOSING_FROM" ] || [ -n "$BCOPY" ]; then
         if ! IFS= read -r -t 1 line <&3; then
-            now; [ $((NOW - CLOSET)) -ge 1 ] && close_pending
+            now; [ -n "$CLOSING_FROM" ] && [ $((NOW - CLOSET)) -ge 1 ] && close_pending
             continue
         fi
     else

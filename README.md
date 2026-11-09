@@ -16,10 +16,13 @@ other one follows. PDFs and EPUBs become a two-page book, one page on each table
   (two blank pages), deleting a page also deletes its partner page when that one is blank.
   Strokes are copied when the notebook is opened and closed, not live; after a page move that
   brings pages with new strokes to the other tablet, both tablets close and reopen the
-  notebook once (2-4 s).
+  notebook once (a few seconds).
 - **Notebooks from before** (each tablet with its own pages under the same name) are merged the
   first time they are opened together: main page 1, sub page 1, main page 2, ... so each spread
   looks as before. Both originals are kept in `dualrm/merged/<date-time>/` on each tablet.
+  The same notebook on both tablets (a reMarkable cloud copy, or the same pages with the same
+  strokes on each) is not merged: its pages are matched as they are, and a page only one
+  tablet has gets a blank partner on the other.
 - **Book mode** (PDF / EPUB present on both tablets, e.g. through the reMarkable cloud):
   one tablet shows the left page, the other the right page. A swipe or page key on either
   tablet turns the spread on both, in one step. Jumping to a page (page list, search, link)
@@ -138,7 +141,9 @@ If you already start xovi another way, disable it: `systemctl disable dualrm-xov
 
 Removes the services, scripts and patch, takes the sub's key off the main and restarts
 xochitl. xovi and its other extensions stay. Annotation backups and the notebooks as they were
-before merging are kept in `/home/root/dualrm-backup` (`merged/` for the notebooks).
+before merging are kept in `/home/root/dualrm-backup` (`merged/` for the notebooks), and so are
+the shared notebooks' page maps (`pagemap/`): `install.sh` puts them back when the sub has
+none, so a reinstall does not merge the notebooks again.
 
 ## Configuration
 
@@ -247,9 +252,13 @@ systemctl disable --now dualrm-usbrole               # (either) USB-C back to de
   attached (dualrm0, ...)`.
 - **Notebook pages out of step**: the sub's `sync.log` shows `notebook:` lines; the page map is
   `dualrm/pagemap/<sub notebook id>`. A notebook pair with a missing or unusable map is paired
-  again the next time it is opened, and when both notebooks exist and neither is new, that
-  means merging them again (the pages double). To start over, delete the notebook on one
+  again the next time it is opened: when both notebooks exist, neither is new and their pages
+  differ (strokes), that means merging them again (the pages double). To start over, delete the notebook on one
   tablet (the other tablet then creates it again blank) rather than the map.
+- **`refusing to delete N of M pages on <tablet>`** in the sub's `sync.log`: pages deleted on
+  one tablet are not deleted on the other when that would remove more than half of its pages
+  (and more than 10), or leave it fewer than 2 (a broken map must not empty a notebook). If the
+  pages were deleted on purpose, delete the same pages on the tablet named (page overview).
 - **The UI misbehaves after an update**: run `/home/root/xovi/stock` on that tablet, then
   rebuild the hash table and re-run `install.sh`. If it still fails, that firmware is not
   supported yet: please open an issue with the `journalctl` output above.

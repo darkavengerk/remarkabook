@@ -132,6 +132,11 @@ if [ ! -f "$D/dualrm.conf" ]; then
     [ -n "$MAIN_LAN" ] && sed -i "s/^MAIN_LAN=.*/MAIN_LAN=$MAIN_LAN/" "$D/dualrm.conf"
 fi
 rm -rf "$T"
+# page maps kept by uninstall.sh: shared notebooks stay paired (without them, merged again)
+if [ -z "$(ls -A "$D/pagemap" 2>/dev/null)" ] && [ -d /home/root/dualrm-backup/pagemap ]; then
+    mkdir -p "$D/pagemap" && cp -a /home/root/dualrm-backup/pagemap/. "$D/pagemap/"
+    echo "  page maps restored from /home/root/dualrm-backup/pagemap"
+fi
 [ -f "$D/id_dualrm" ] || dropbearkey -t ed25519 -f "$D/id_dualrm" >/dev/null
 dropbearkey -y -f "$D/id_dualrm" | grep '^ssh-' > "$D/id_dualrm.pub"
 
