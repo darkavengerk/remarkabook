@@ -86,12 +86,36 @@ AFFECT /qml/device/view/main/MainView.qml
                         documentView.item.dualrmPageStep = 1;
                         dualrmPoller.emitState();
                     }
-                    function onCurrentPageChanged() { dualrmPoller.emitPage(); }
+                    // a page added on the way (dualrmPageSettle running) is reported once it settles
+                    function onCurrentPageChanged() {
+                        if (!dualrmPageSettle.running) {
+                            dualrmPoller.emitPage();
+                        }
+                    }
                 }
                 Connections {
                     target: documentView.item?.document ?? null
                     ignoreUnknownSignals: true
-                    function onPageCountChanged() { dualrmPoller.emitPage(); }
+                    function onPageCountChanged() {
+                        dualrmPageSettle.tries = 0;
+                        dualrmPageSettle.restart();
+                    }
+                }
+                // Adding a page changes the count first and opens the new page later (DocumentView's
+                // addPage callback, addingPage = true until then). One PAGE report with both, so the
+                // sync sees the current page = where the page was inserted, not the page before it.
+                Timer {
+                    id: dualrmPageSettle
+                    property int tries: 0
+                    interval: 250
+                    onTriggered: {
+                        if (documentView.item?.addingPage && tries < 20) {
+                            tries++;
+                            restart();
+                            return;
+                        }
+                        dualrmPoller.emitPage();
+                    }
                 }
                 Connections {
                     target: documentView.item
