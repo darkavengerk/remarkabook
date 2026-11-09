@@ -5,6 +5,8 @@
 ;              SCROLL <uuid> <page> <top>   (notebook page scrolled: scene y at the top of the view,
 ;                                            reported once it settles; not after setscroll)
 ;              SLEEP / WAKE                 (this tablet goes to sleep / woke up)
+;              ADDED <uuid> <j1,j2,...>     (pages added: their positions in the new order; not
+;                                            for pages added by the addpage / ensure commands)
 ;              ORDER <uuid> <i0,i1,...>     (pages moved, same pages: the page now at position j was
 ;                                            at position i_j before)
 ;   command <- GET http://127.0.0.1:7782/next  answered with "<nonce> <command...>":
@@ -76,6 +78,7 @@ AFFECT /qml/device/view/main/MainView.qml
                 // ---- page order: moves on one tablet are repeated on the other (ORDER / reorder)
                 property var pageIdList: []     // page ids of the open document, in order
                 property bool reordering: false // applying a reorder: no ORDER / PAGE reports
+                property bool addQuiet: false   // pages added by a command: no ADDED report
                 property var orderTarget: []
                 property string orderWaitId: ""
                 property int orderWaitAt: -1
@@ -97,9 +100,12 @@ AFFECT /qml/device/view/main/MainView.qml
                 function pageMapChanged() {
                     const now = pageIds();
                     const old = pageIdList;
+                    // pages added or removed: reportAdded() compares once the count settles
+                    if (now.length !== old.length) {
+                        return;
+                    }
                     pageIdList = now;
-                    // pages added or removed: the PAGE report covers that
-                    if (reordering || now.length !== old.length || now.length < 2) {
+                    if (reordering || now.length < 2) {
                         return;
                     }
                     const pos = {};
@@ -177,6 +183,33 @@ AFFECT /qml/device/view/main/MainView.qml
                     onTriggered: dualrmPoller.orderStep()
                 }
 
+                // Where pages were added, from the page ids before and after (the current page is
+                // not reliable: adding from the page overview does not open the new page).
+                function reportAdded() {
+                    const now = pageIds();
+                    const old = pageIdList;
+                    pageIdList = now;
+                    if (addQuiet) {
+                        addQuiet = false;
+                        return;
+                    }
+                    if (now.length <= old.length || !documentView.item?.document) {
+                        return;
+                    }
+                    const had = {};
+                    for (let i = 0; i < old.length; i++) {
+                        had[old[i]] = true;
+                    }
+                    const at = [];
+                    for (let j = 0; j < now.length; j++) {
+                        if (!had[now[j]]) {
+                            at.push(j);
+                        }
+                    }
+                    if (at.length === now.length - old.length) {
+                        ev("ADDED " + String(documentView.item.document.id) + " " + at.join(","));
+                    }
+                }
                 function emitState() {
                     const d = documentView.item?.document;
                     if (!d) {
@@ -224,6 +257,7 @@ AFFECT /qml/device/view/main/MainView.qml
                             restart();
                             return;
                         }
+                        dualrmPoller.reportAdded();
                         dualrmPoller.emitPage();
                     }
                 }
@@ -351,7 +385,10 @@ AFFECT /qml/device/view/main/MainView.qml
                                 respond(nonce, "error no-document");
                                 return;
                             }
-                            const idx = parts.length > 2 ? parseInt(parts[2]) : undefined;
+                            // the stock addPage reads index 0 as "after the current page": the
+                            // first place reachable is 1 (the page overview only adds after a page)
+                            const idx = parts.length > 2 ? Math.max(1, parseInt(parts[2])) : undefined;
+                            addQuiet = true;
                             documentView.item.addPage(open, idx);
                             respond(nonce, "ok " + open.pageCount);
                             return;
@@ -362,6 +399,7 @@ AFFECT /qml/device/view/main/MainView.qml
                                 respond(nonce, "error no-document");
                                 return;
                             }
+                            addQuiet = documentView.item.document.pageCount < parseInt(parts[2]);
                             const total = documentView.item.dualrmEnsurePages(parseInt(parts[2]), parseInt(parts[3]));
                             respond(nonce, "ok " + total);
                             return;

@@ -6,6 +6,7 @@
 #   GET /ev?SCROLL%20<uuid> <pg> <y> notebook page scrolled (scene y at the top of the view)
 #   GET /ev?SLEEP / WAKE            this tablet goes to sleep / woke up
 #   GET /ev?ORDER%20<uuid> <perm>   pages moved (see dualrm.qmd)
+#   GET /ev?ADDED%20<uuid> <pos>    pages added at these positions (see dualrm.qmd)
 #   GET /ev?RESP%20<nonce> <text>   answer to the command in $D/cmd
 . /home/root/dualrm/dualrm-lib.sh
 IFS= read -r req
@@ -25,7 +26,7 @@ case "$msg" in
     DOC\ *)
         u=${msg#DOC }
         out="EV DOC $u $(doc_type "$u") $(doc_path "$u")" ;;
-    PAGE\ *|PEN\ *|SCROLL\ *|ORDER\ *|SLEEP|WAKE)
+    PAGE\ *|PEN\ *|SCROLL\ *|ORDER\ *|ADDED\ *|SLEEP|WAKE)
         out="EV $msg" ;;
 esac
 # hand on before answering, so events stay in order (the patch sends them one at a time)

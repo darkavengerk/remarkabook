@@ -382,11 +382,9 @@ pages_sync() { # side oldpage oldcount: side's pages changed; bring the other ta
     case "$MODE" in
         book) book_sync "$x" "$q" ;;
         mirror)
-            if [ "$pc" -eq $((qc + 1)) ] && [ "$ypc" -eq "$qc" ] && [ "$cp" -ge 1 ] && [ "$cp" -lt "$pc" ]; then
-                # one page inserted at cp: insert at the same place
-                now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
-                req "$y" addpage "$cp" >/dev/null && log "$y: inserted page at $cp"
-            elif [ "$ypc" -lt "$pc" ]; then
+            # pages added in the middle came as ADDED (on_added) before this; what is still
+            # missing (an older patch, a page added while apart) is appended
+            if [ "$ypc" -lt "$pc" ]; then
                 now; put EXPPG "$y" "$cp"; put EXPT "$y" "$NOW"; moved "$y"
                 t=$(req "$y" ensure "$pc" "$cp") && [ "$t" -gt "$ypc" ] && { put PC "$y" "$t"; log "$y: $((t - ypc)) page(s) added -> $t"; }
             else
@@ -481,6 +479,18 @@ on_page() { # side uuid pagecount currentpage
 # Pages moved on one tablet (page overview: Move) are moved the same way on the other: the patch
 # reports the new order as positions of the old one ("2,0,1": the old third page is now first),
 # which maps onto the other tablet's pages by position (each tablet has its own page ids).
+# Pages added on one tablet are added at the same positions on the other (ADDED: positions in the
+# new order, ascending, so adding them one by one in that order gives the same layout).
+on_added() { # side uuid positions
+    x=$1; [ "$2" = "$(get DOC "$x")" ] || return
+    [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
+    y=$(other "$x")
+    for j in $(echo "$3" | tr , ' '); do
+        now; put EXPPG "$y" "$j"; put EXPT "$y" "$NOW"; moved "$y"
+        req "$y" addpage "$j" >/dev/null && put PC "$y" $(( $(get PC "$y") + 1 )) && log "$y: page added at $j like on $x"
+    done
+}
+
 on_order() { # side uuid perm
     x=$1; [ "$2" = "$(get DOC "$x")" ] || return
     [ "$MODE" = mirror ] && [ -z "$PENDING" ] || return
@@ -603,6 +613,9 @@ while :; do
         SCROLL\ *)
             set -f; set -- $body; set +f
             on_scroll "$side" "$2" "$3" "$4" ;;
+        ADDED\ *)
+            set -f; set -- $body; set +f
+            on_added "$side" "$2" "$3" ;;
         ORDER\ *)
             set -f; set -- $body; set +f
             on_order "$side" "$2" "$3" ;;
