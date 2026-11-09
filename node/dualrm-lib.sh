@@ -190,3 +190,26 @@ ann_place() { # staging dir laid out like $XD -> move its files into $XD, keepin
     [ -d "$D/backup" ] && find "$D/backup" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} \;
     :
 }
+
+pages_blank() { # doc id8,... -> the id8s whose page has no strokes here: no .rm, or a .rm under
+                # 512 bytes (xochitl saves a page without strokes as 409 bytes on 3.23)
+    for _i in $(echo "$2" | tr , ' '); do
+        _f=$(ls "$XD/$1/$_i"*.rm 2>/dev/null | head -n 1)
+        if [ -z "$_f" ] || [ "$(stat -c %s "$_f")" -lt 512 ]; then echo "$_i"; fi
+    done
+}
+
+page_backup() { # doc id8,... -> those pages' strokes into $D/backup/<time>/<doc>/ (before a delete)
+    _b=$D/backup/$(date +%Y%m%d-%H%M%S)/$1
+    for _i in $(echo "$2" | tr , ' '); do
+        for _f in "$XD/$1/$_i"*.rm; do
+            [ -f "$_f" ] && mkdir -p "$_b" && cp -p "$_f" "$_b/"
+        done
+    done
+    :
+}
+
+notebook_copy() { # doc dir -> all of the notebook's files into dir (kept before a merge)
+    mkdir -p "$2" && cp -rp "$XD/$1" "$XD/$1".* "$2/" 2>/dev/null
+    :
+}
