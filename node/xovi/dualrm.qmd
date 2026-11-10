@@ -5,6 +5,7 @@
 ;              SCROLL <uuid> <page> <top>   (notebook page scrolled: scene y at the top of the view,
 ;                                            reported once it settles; not after setscroll)
 ;              SLEEP / WAKE                 (this tablet goes to sleep / woke up)
+;              START                        (xochitl started: the link indicator is unset)
 ;              PAGES <uuid> <id8,id8,...>   (pages added, moved or deleted: the page list, first 8
 ;                                            characters of each page id, once it settles; also
 ;                                            after the commands below changed it)
@@ -310,6 +311,7 @@ AFFECT /qml/device/view/main/MainView.qml
                 }
                 Component.onCompleted: {
                     poll();
+                    ev("START");
                     emitState();
                 }
 

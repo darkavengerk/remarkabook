@@ -630,12 +630,18 @@ while :; do
             on_pages "$side" "$2" "$3" ;;
         SLEEP) on_sleep "$side" ;;
         WAKE) on_wake "$side" ;;
+        START)
+            # xochitl (re)started there and forgot the link indicator: show it again
+            [ "$LINK" = 1 ] || continue
+            log "$side: xochitl started"
+            if [ "$side" = sub ]; then local_request link "$LVIA" >/dev/null
+            else remote_request link "$LVIA" >/dev/null; fi ;;
         LINKUP\ *)
-            via=${body#LINKUP }
-            LINK=1; AWAKE_main=1; log "link up ($via)"
+            LVIA=${body#LINKUP }
+            LINK=1; AWAKE_main=1; log "link up ($LVIA)"
             : > "$D/linked"
-            local_request link "$via" >/dev/null
-            remote_request link "$via" >/dev/null
+            local_request link "$LVIA" >/dev/null
+            remote_request link "$LVIA" >/dev/null
             save_main_id
             remote_request emit >/dev/null ;;
         LINKDOWN)
