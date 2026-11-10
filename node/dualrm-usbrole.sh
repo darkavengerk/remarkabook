@@ -16,6 +16,7 @@
 # when the other tablet shows up or goes (this tablet host), and when a USB host starts talking
 # to us (this tablet device: the main as host, or a PC).
 D=/home/root/dualrm
+. "${DUALRM_LIB:-$D/dualrm-lib.sh}"     # nap, usb_peer
 # USB-C controller. Its ci_hdrc.N number depends on probe order (the pogo controller,
 # 30b10000, can take ci_hdrc.0 when it is enabled), so resolve it instead of assuming 0.
 USBC=/sys/devices/soc0/soc/30800000.aips-bus/30b20000.usb
@@ -60,20 +61,11 @@ keep_hub_awake() { # the USB-C root hub (bus number varies once the pogo host ex
     k=0; h=""
     while [ $k -lt 40 ]; do
         for h in "$CI"/usb*/power/control; do [ -e "$h" ] && break 2; done
-        h=""; usleep 50000; k=$((k + 1))
+        h=""; nap 0.05; k=$((k + 1))
     done
     [ -n "$h" ] || return 0
     rd "$h"
     [ "$V" = on ] || echo on > "$h" 2>/dev/null
-}
-# The other tablet shows up as a USB network interface (cdc_ether). Any other USB device
-# (hub, card reader, keyboard) must not count.
-peer() { # -> PEER: its interface name, "" when there is none
-    PEER=""
-    for n in /sys/class/net/*; do
-        case "$(readlink "$n/device/driver" 2>/dev/null)" in *cdc_ether*) PEER=${n##*/}; return 0 ;; esac
-    done
-    return 1
 }
 # The main: NetworkManager leaves the interface alone (conf.d/dualrm.conf), so bring it up
 # here, with an IPv6 link-local address only. The sub finds the main on it like on WiFi and
@@ -89,11 +81,12 @@ P_LAST=""; P_N=0; WANT=""
 DONE=""         # role last decided
 PEER_ON=""      # the other tablet's interface while we are host and it is there
 HOST_ON=0       # 1 while a USB host talks to us (we are device)
+nap_init "$D/usbrole.nap"
 log "started ($([ $SUB = 1 ] && echo sub || echo main))"
 while :; do
     rd "$ONLINE"
     if [ "$V" = 1 ]; then settle 1; else settle 0; fi
-    if [ -z "$WANT" ]; then usleep 250000; continue; fi     # reading changed: sample faster
+    if [ -z "$WANT" ]; then nap 0.25; continue; fi     # reading changed: sample faster
     set_role "$WANT"
     if [ "$WANT" != "$DONE" ]; then
         # a new decision (not the controller falling back after resume): the sync re-picks its
@@ -102,7 +95,7 @@ while :; do
         DONE=$WANT; PEER_ON=""; HOST_ON=0
     fi
     if [ "$WANT" = host ]; then
-        peer
+        usb_peer
         if [ -n "$PEER" ] && [ "$PEER" != "$PEER_ON" ]; then
             PEER_ON=$PEER; log "other tablet attached ($PEER, this tablet is USB host)"
             [ $SUB = 1 ] || peer_up "$PEER"
@@ -122,5 +115,5 @@ while :; do
             usb_link && kick_sync
         fi
     fi
-    sleep 2     # settled: state checks only
+    nap 2       # settled: state checks only
 done

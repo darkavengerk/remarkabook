@@ -262,3 +262,39 @@ notebook_copy() { # doc dir -> all of the notebook's files into dir (kept before
         cp -rp "$_f" "$2/" || return 1
     done
 }
+
+# ---------------------------------------------------------------- polling without processes
+# The USB role switcher and the sync's link search check every few seconds while the tablet is
+# awake; a process per check (sleep, readlink) kept the CPU at a few percent. These two run on
+# shell builtins in the usual case.
+nap_init() { # fifo -> nap reads from it with a timeout (nobody writes to it); sleep without it
+    { [ -p "$1" ] || { rm -f "$1"; mkfifo "$1"; }; } 2>/dev/null
+    [ -p "$1" ] && exec 9<> "$1" && NAP_FD=9
+    return 0
+}
+NAP_FD=""
+nap() { # seconds (fractions allowed)
+    if [ -n "$NAP_FD" ]; then read -r -t "$1" _nap <&9; else sleep "$1"; fi
+    return 0
+}
+
+NET=/sys/class/net
+NET_LIST="-"; NET_PEER=""; NET_N=0
+usb_peer() { # -> PEER: the other tablet's interface when this tablet is USB host (cdc_ether: a
+             # USB network device; hubs, card readers and keyboards do not count), "" when there
+             # is none; 1 then. readlink runs only when the interface names changed, and on every
+             # 30th call (a driver bound after its interface showed up).
+    _l=""
+    for _n in "$NET"/*; do _l="$_l ${_n##*/}"; done
+    NET_N=$((NET_N + 1))
+    if [ "$_l" != "$NET_LIST" ] || [ "$NET_N" -ge 30 ]; then
+        NET_LIST=$_l; NET_N=0; NET_PEER=""
+        for _n in "$NET"/*; do
+            case "$(readlink "$_n/device/driver" 2>/dev/null)" in
+                *cdc_ether*) NET_PEER=${_n##*/}; break ;;
+            esac
+        done
+    fi
+    PEER=$NET_PEER
+    [ -n "$PEER" ]
+}

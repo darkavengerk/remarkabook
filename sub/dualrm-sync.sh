@@ -65,16 +65,13 @@ pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main
     MAIN=""; VIA=""
     # USB link, this tablet the USB host: the main is a cdc_ether interface (USB-C in host
     # mode, or the pogo pins) and serves 10.11.99.1
-    for n in /sys/class/net/*; do
-        case "$(readlink "$n/device/driver" 2>/dev/null)" in
-            *cdc_ether*)
-                k=0
-                while [ $k -lt 10 ]; do   # DHCP from the main can take a few seconds
-                    if ping -c1 -W1 "$MAIN_USB" >/dev/null 2>&1; then MAIN=$MAIN_USB; VIA=usb; return; fi
-                    k=$((k + 1))
-                done ;;
-        esac
-    done
+    if usb_peer; then
+        k=0
+        while [ $k -lt 10 ]; do   # DHCP from the main can take a few seconds
+            if ping -c1 -W1 "$MAIN_USB" >/dev/null 2>&1; then MAIN=$MAIN_USB; VIA=usb; return; fi
+            k=$((k + 1))
+        done
+    fi
     # USB link, this tablet the USB device (the sub gets power from the adapter, the main does
     # not): the main is the host and has no fixed address on the cable, so it is found like on
     # WiFi, on each of our gadget interfaces that is up (a PC is probed too: not the main)
@@ -96,9 +93,10 @@ pick_main() { # -> MAIN (address) and VIA (usb | wifi); MAIN empty when the main
 
 link_loop() {
     LAN_SKIP=0   # uptime until which MAIN_LAN is not tried (it answered ping but gave no link)
+    nap_init "$D/sync.nap"
     while :; do
         pick_main
-        if [ -z "$MAIN" ]; then sleep 5; continue; fi
+        if [ -z "$MAIN" ]; then nap 5; continue; fi
         log "connecting to main at $MAIN"
         echo "$MAIN" > "$D/mainhost"
         rm -f "$D/hello"
@@ -117,7 +115,7 @@ link_loop() {
             # MAIN_LAN is another host on this network: let discovery have a turn
             now; LAN_SKIP=$((NOW + 300)); log "no link at $MAIN_LAN: not tried for 5 min"
         fi
-        sleep 3
+        nap 3
     done
 }
 

@@ -5,7 +5,8 @@ cd "$(dirname "$0")/.." || exit 1
 FAIL=0
 check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got '$2', want '$3'"; FAIL=1; fi; }
 
-DUALRM_USBROLE_LIB=1 . ./node/dualrm-usbrole.sh
+DUALRM_USBROLE_LIB=1; DUALRM_LIB=./node/dualrm-lib.sh
+. ./node/dualrm-usbrole.sh
 
 feed() { # readings... -> the role each one settles on ("-": not settled yet)
     _o=""

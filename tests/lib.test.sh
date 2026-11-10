@@ -61,4 +61,24 @@ check "find_child: any document" "$(find_child "" DocumentType Same | grep -c .)
 rm "$T/x/nb1.metadata"
 check "find_child: no notebook of that name" "$(find_child "" NotebookType Same)" ""
 
+# usb_peer: readlink only when the interface names change (or every 30th call)
+NET=$T/net; mkdir -p "$NET/lo" "$NET/wlan0/device" "$T/drv/cdc_ether" "$T/drv/brcmfmac"
+ln -s "$T/drv/brcmfmac" "$NET/wlan0/device/driver"
+usb_peer; check "usb_peer: none" "$?/$PEER" "1/"
+mkdir -p "$NET/usb1/device"; ln -s "$T/drv/cdc_ether" "$NET/usb1/device/driver"
+usb_peer; check "usb_peer: the other tablet shows up" "$?/$PEER" "0/usb1"
+rm "$NET/usb1/device/driver"; ln -s "$T/drv/brcmfmac" "$NET/usb1/device/driver"
+usb_peer; check "usb_peer: same names, cached" "$PEER" usb1
+i=0; while [ $i -lt 30 ]; do usb_peer; i=$((i + 1)); done
+check "usb_peer: looked again after 30 calls" "$PEER" ""
+rm -rf "$NET/usb1"
+usb_peer; check "usb_peer: gone" "$PEER" ""
+
+# nap: waits on the fifo, without one it sleeps
+nap_init "$T/nap"; check "nap: fifo open" "$NAP_FD" 9
+cs() { read -r _u _ < /proc/uptime; _u=${_u%.*}${_u#*.}; echo $((${_u#0} + 0)); }  # 1/100 s
+a=$(cs); nap 0.3; b=$(cs)
+check "nap: waited about 0.3 s" "$(( (b - a + 5) / 10 ))" 3
+NAP_FD=""; nap 0.1; check "nap: sleep fallback" "$?" 0
+
 [ $FAIL = 0 ] && echo PASS || { echo FAILED; exit 1; }
